@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${PGDATABASE:-ragdb}
+      POSTGRES_USER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-change_me}
+    ports:
+      - "${PGPORT:-5432}:5432"
+    volumes:
+      - qubettera-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-ragdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  qubettera-postgres:
+

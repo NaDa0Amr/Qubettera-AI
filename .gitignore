@@ -217,6 +217,26 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Unified Qubettera runtime state
+/data/
+!/data/.gitkeep
+/outputs/*
+!/outputs/memory/
+!/outputs/opinions/
+!/outputs/discussions/
+/outputs/memory/*
+/outputs/opinions/*
+/outputs/discussions/*
+!/outputs/memory/.gitkeep
+!/outputs/opinions/.gitkeep
+!/outputs/discussions/.gitkeep
+/logs/
+/tests/**/.generated/
+/.audit-tmp/
+/.pytest-*/
+/.test-*/
+/test_run_review/
+
 
 # Operating system files
 .DS_Store
@@ -228,38 +248,3 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
-
-# Rag-system local files
-/Rag-system/**/data/
-/Rag-system/**/qubettera/
-/Rag-system/test_run_review/
-/Rag-system/.pytest-*/
-/Rag-system/.test-*/
-
-# Large generated data files
-/Rag-system/**/*.jsonl
-/Rag-system/**/*.parquet
-/Rag-system/**/*.pkl
-/Rag-system/**/*.pickle
-/Rag-system/**/*.npy
-/Rag-system/**/*.npz
-/Rag-system/**/*.h5
-/Rag-system/**/*.hdf5
-/Rag-system/**/*.bin
-/Rag-system/**/*.safetensors
-
-# Multi-Agent-Collaboration local files
-/Multi-Agent-Collaboration/logs/
-/Multi-Agent-Collaboration/tests/.generated/
-/Multi-Agent-Collaboration/outputs/opinions/*.json
-/Multi-Agent-Collaboration/outputs/memory/*.json
-/Multi-Agent-Collaboration/outputs/week3/*.json
-/Multi-Agent-Collaboration/outputs/week3/*.jsonl
-/Multi-Agent-Collaboration/outputs/**/*.jsonl
-
-# Intelligent-Agent-Framework local files
-/Intelligent-Agent-Framework/logs/
-/Intelligent-Agent-Framework/tests/.generated/
-/Intelligent-Agent-Framework/outputs/opinions/*.json
-/Intelligent-Agent-Framework/outputs/memory/*.json
-/Intelligent-Agent-Framework/outputs/**/*.jsonl
