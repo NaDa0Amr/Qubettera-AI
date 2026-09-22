@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ class DiscussionOrchestrator:
         if configured_workers <= 0:
             raise ValueError("max_workers must be greater than zero.")
         self.max_workers = configured_workers
+        self._write_lock = threading.Lock()
 
     def run(self, config: DiscussionConfig) -> DiscussionResult:
         config.validate()
@@ -153,6 +155,12 @@ class DiscussionOrchestrator:
             )
             return result
         except Exception as exc:
+            # Merge partial results from any mid-round DiscussionExecutionError
+            # so the failure report includes all completed turns.
+            if isinstance(exc, DiscussionExecutionError):
+                partial_from_round = exc.partial_result.messages
+                if partial_from_round:
+                    messages.extend(partial_from_round)
             failed_at = self.clock()
             partial = DiscussionResult(
                 discussion_id=discussion_id,
@@ -230,15 +238,16 @@ class DiscussionOrchestrator:
         outcomes,
     ) -> Iterator[RoutedMessage]:
         for message, runtime_metadata in outcomes:
-            self._write_event(
-                {
-                    "event": "turn_completed",
-                    "discussion_id": discussion_id,
-                    "created_at": message.created_at,
-                    "message": message.to_dict(),
-                    "runtime_metadata": runtime_metadata,
-                }
-            )
+            with self._write_lock:
+                self._write_event(
+                    {
+                        "event": "turn_completed",
+                        "discussion_id": discussion_id,
+                        "created_at": message.created_at,
+                        "message": message.to_dict(),
+                        "runtime_metadata": runtime_metadata,
+                    }
+                )
             yield message
 
     def _execute_turn(
@@ -299,7 +308,8 @@ class DiscussionOrchestrator:
         return message, turn_result.metadata
 
     def _write_event(self, event: dict) -> None:
-        self.event_sink.write_event(event)
+        with self._write_lock:
+            self.event_sink.write_event(event)
 
     @staticmethod
     def _dedupe_evidence(items: tuple[EvidenceItem, ...]) -> tuple[EvidenceItem, ...]:
