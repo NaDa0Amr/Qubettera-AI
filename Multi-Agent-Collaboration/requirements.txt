@@ -1,0 +1,37 @@
+# Core LangChain/LangGraph ecosystem
+langgraph
+langchain
+langchain-core
+langchain-openai
+langchain-openrouter
+langchain-groq
+langchain-ollama
+langchain-community
+langgraph-checkpoint-postgres
+langfuse
+
+# Prompt Templating
+jinja2
+
+# HTTP & Utilities
+requests
+python-dotenv
+pydantic
+typing-extensions
+
+# Retrieval — direct Supabase + Kaggle Ollama
+ollama>=0.4.0
+psycopg2-binary>=2.9.9
+
+# Schema validation
+jsonschema>=4.0
+
+# For live search & deep crawl tools
+tavily-python
+ddgs
+crawl4ai
+playwright
+
+# Testing & Verification
+pytest
+pytest-asyncio

@@ -1,0 +1,12 @@
+.env
+.venv/
+venv/
+logs/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+tests/.generated/
+outputs/opinions/*.json
+outputs/memory/*.json
+outputs/week3/*.json
+outputs/week3/*.jsonl

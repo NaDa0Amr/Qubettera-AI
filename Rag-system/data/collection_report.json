@@ -1,0 +1,25 @@
+{
+  "mode": "curated_only",
+  "curated_seeds": 43,
+  "discovered": 43,
+  "preserved": 819,
+  "already_present": 41,
+  "refresh_attempted": 1,
+  "attempted": 2,
+  "new_written": 1,
+  "written": 819,
+  "domains": {
+    "huggingface.co": {
+      "failure": 1
+    },
+    "arxiv.org": {
+      "success": 1,
+      "pdf": 1
+    }
+  },
+  "js_rendering_candidates": [
+    "https://openai.com",
+    "https://ai.meta.com/blog",
+    "https://mistral.ai/news"
+  ]
+}

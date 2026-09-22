@@ -1,0 +1,21 @@
+{
+  "nodes": [
+    "dr_aris",
+    "prof_elena",
+    "systems_specialist",
+    "hybrid_architect",
+    "grad_student"
+  ],
+  "edges": [
+    ["dr_aris", "prof_elena"],
+    ["prof_elena", "dr_aris"],
+    ["prof_elena", "systems_specialist"],
+    ["systems_specialist", "prof_elena"],
+    ["systems_specialist", "hybrid_architect"],
+    ["hybrid_architect", "systems_specialist"],
+    ["hybrid_architect", "grad_student"],
+    ["grad_student", "hybrid_architect"],
+    ["grad_student", "dr_aris"],
+    ["dr_aris", "grad_student"]
+  ]
+}
