@@ -18,10 +18,15 @@
 
 | Change | Why |
 |--------|-----|
-| Added `import threading` | Needed for `threading.Lock()` |
-| Added `self._write_lock = threading.Lock()` in `__init__` | Thread-safe console output when parallel |
+| Added `import threading` | Needed for `threading.RLock()` |
+| Added `self._write_lock = threading.RLock()` in `__init__` | Thread-safe console output when parallel |
 | `_persist_outcomes` now acquires `_write_lock` around `_write_event` | Prevents garbled interleaved output from concurrent agents |
 | `_write_event` itself also holds `_write_lock` | Double protection for direct calls |
+
+> **Bug fix (2026-09-23):** The original `threading.Lock()` caused a self-deadlock
+> because `_persist_outcomes` acquires the lock then calls `_write_event`, which also
+> acquires it. Since `Lock` is non-reentrant, the same thread deadlocked — even in
+> single-threaded mode. Switched to `threading.RLock()` which allows reentrant acquisition.
 | `run()` merges `DiscussionExecutionError.partial_result` messages into failure report | Already present — confirmed working |
 
 **Note:** Qubettera-AI already had `_execute_stage` + `max_workers` + `ThreadPoolExecutor` — this is a cleaner architecture than the `parallel=True` flag. The `--parallel` flag in demo.py maps to `max_workers=len(participants)`, sequential to `max_workers=1`.

@@ -67,7 +67,7 @@ class DiscussionOrchestrator:
         if configured_workers <= 0:
             raise ValueError("max_workers must be greater than zero.")
         self.max_workers = configured_workers
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()
 
     def run(self, config: DiscussionConfig) -> DiscussionResult:
         config.validate()
