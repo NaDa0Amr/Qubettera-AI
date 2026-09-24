@@ -1,7 +1,7 @@
 """Connect every discussion round to the shared local RAG knowledge base.
 
 ``TeamRetrievalProvider`` builds a query from the current discussion state and
-uses the same MiniLM/PostgreSQL retrieval service as the agent workflow.
+uses the same Qwen3/PostgreSQL retrieval service as the agent workflow.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _MAX_COMPONENT_CHARS = 280
 
 
 class TeamRetrievalProvider:
-    """Production retrieval provider backed by MiniLM and PostgreSQL/pgvector.
+    """Production retrieval provider backed by Qwen3 and PostgreSQL/pgvector.
 
     One instance is shared across an entire discussion run. The orchestrator
     calls ``build_query``/``retrieve`` once per agent per turn (initial stage

@@ -40,7 +40,7 @@ Chunks carry URL/title provenance, heading metadata, document/chunk indexes, col
 
 ## 4. Embeddings and cache identity
 
-The default model is `all-MiniLM-L6-v2` with 384 dimensions. Model name, requested revision, dimensionality, pipeline version, and preprocessing version are configured centrally in `src.settings`.
+The default model is `Qwen/Qwen3-Embedding-0.6B` with 1024 dimensions. Query embeddings use the model's built-in `query` retrieval prompt while document embeddings remain unprompted. Model name, requested revision, dimensionality, pipeline version, and preprocessing version are configured centrally in `qubettera.rag.settings`.
 
 The embedding artifact is resumable, but a cache row is reusable only when all of these agree:
 
@@ -80,7 +80,7 @@ Retrieval has four stages:
 
 Before searching, retrieval verifies that the table contains exactly the configured embedding model, revision, preprocessing version, and pipeline version. This prevents query vectors from being compared with incompatible stored vectors.
 
-Vector embedding and cross-encoder reranking use deterministic contextual text containing the document title, section path, and original chunk. Returned evidence remains the original chunk text. With the current 1200-character chunks, MiniLM can truncate some contextual inputs, so chunk size remains an evaluation-controlled trade-off.
+Vector embedding and cross-encoder reranking use deterministic contextual text containing the document title, section path, and original chunk. Returned evidence remains the original chunk text. The Qwen3 embedding model supports these contextual inputs without MiniLM's former short-context truncation constraint.
 
 Candidate selection allows at most two chunks per normalized source before reranking, and final output allows one. Normalization collapses arXiv versions and trailing slashes. This avoids one long paper consuming the entire top-k and makes source-level evaluation well defined.
 

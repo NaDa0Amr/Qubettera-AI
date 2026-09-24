@@ -22,8 +22,8 @@ Parameters:
   MIN_CHUNK_LENGTH = 200 chars (drops near-empty/boilerplate fragments)
 
 Trade-off considered: 1200/300 preserves more local evidence and reduces
-fragmentation, but the configured MiniLM models may truncate long contextual
-chunks. Evaluation should be used before increasing this further.
+fragmentation while remaining comfortably within the configured Qwen3
+embedding model's context window.
 
 Run:
     python src/chunk.py

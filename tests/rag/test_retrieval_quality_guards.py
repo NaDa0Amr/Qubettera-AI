@@ -12,6 +12,7 @@ from qubettera.rag.evaluate import (
 )
 from qubettera.rag.retrieve import (
     _console_safe,
+    _encode_query,
     _limit_per_source,
     _rrf_fuse,
     _validate_index_identity,
@@ -118,6 +119,28 @@ def test_retrieval_defaults_to_evaluated_hybrid_only_mode():
     from qubettera.rag.retrieve import retrieve
 
     assert inspect.signature(retrieve).parameters["rerank"].default is False
+
+
+def test_query_embedding_uses_model_retrieval_prompt_when_available():
+    class PromptAwareModel:
+        prompts = {"query": "retrieval prompt"}
+
+        def encode(self, query, **kwargs):
+            return query, kwargs
+
+    query, kwargs = _encode_query(PromptAwareModel(), "mixture of experts")
+    assert query == "mixture of experts"
+    assert kwargs["prompt_name"] == "query"
+    assert kwargs["normalize_embeddings"] is True
+
+
+def test_query_embedding_remains_compatible_with_models_without_prompts():
+    class PlainModel:
+        def encode(self, query, **kwargs):
+            return query, kwargs
+
+    _, kwargs = _encode_query(PlainModel(), "attention")
+    assert "prompt_name" not in kwargs
 
 
 def test_candidate_pool_cannot_be_smaller_than_top_k():

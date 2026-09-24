@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 QRELS_VERSION = "source-qrels-v2"
+CHUNKS_PATH = Path("data/chunks.jsonl")
 
 # These are explicit source-level qrels. Relevance never depends on a keyword
 # appearing in a returned title or chunk. Paper IDs were checked against their

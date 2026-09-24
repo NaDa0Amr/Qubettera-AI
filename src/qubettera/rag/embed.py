@@ -31,6 +31,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qubettera.rag.settings import (
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
     EMBEDDING_MODEL_REVISION,
@@ -50,7 +51,7 @@ EMBEDDED_PATH = Path("data/chunks_with_embeddings.jsonl")
 MODEL_NAME = EMBEDDING_MODEL
 MODEL_REVISION = EMBEDDING_MODEL_REVISION
 EXPECTED_DIM = EMBEDDING_DIM
-BATCH_SIZE = 64
+BATCH_SIZE = EMBEDDING_BATCH_SIZE
 
 
 def _json_default(value):
@@ -212,7 +213,7 @@ def run():
         print("All current chunks are embedded; compacted the embedding cache.")
         return
 
-    print(f"Loading embedding model: {MODEL_NAME} (first run downloads ~80MB)")
+    print(f"Loading embedding model: {MODEL_NAME} (first run downloads ~1.2GB)")
     model = load_embedding_model()
     get_dimension = getattr(model, "get_embedding_dimension", None)
     actual_dim = (

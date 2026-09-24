@@ -1,7 +1,7 @@
 """LangChain tool wrapper around the shared local RAG retrieval backend.
 
 The public interface (knowledge_retrieval) is unchanged from the original
-HTTP-based implementation. It calls the shared MiniLM/PostgreSQL retrieval
+HTTP-based implementation. It calls the shared Qwen3/PostgreSQL retrieval
 service directly, removing the API-server dependency.
 
 A structured JSON envelope {"documents": [...], "error": ...} is returned
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def retrieve(query: str, top_k: int = 5, rerank: bool = False) -> list[dict[str, Any]]:
-    """Execute MiniLM + PostgreSQL hybrid retrieval."""
+    """Execute Qwen3 + PostgreSQL hybrid retrieval."""
     return retrieve_from_rag(query=query, top_k=top_k, rerank=rerank)
 
 
@@ -50,7 +50,7 @@ def _regenerate_query_with_llm(original_query: str, reason: str = "") -> str | N
 
 @tool
 def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str:
-    """Search the local MiniLM/PostgreSQL knowledge base for grounded evidence.
+    """Search the local Qwen3/PostgreSQL knowledge base for grounded evidence.
 
     Use a focused natural-language query. Results contain text, title, source
     URL, and distance score. Returns a JSON string with a 'documents' list.
@@ -118,7 +118,7 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
 
 @tool("retrieve_knowledge_base")
 def retrieve_knowledge_base(query: str, top_k: int = 5, rerank: bool = False) -> str:
-    """Search the local MiniLM/PostgreSQL knowledge base for grounded evidence."""
+    """Search the local Qwen3/PostgreSQL knowledge base for grounded evidence."""
     return knowledge_retrieval.invoke({"query": query, "top_k": top_k, "rerank": rerank})
 
 

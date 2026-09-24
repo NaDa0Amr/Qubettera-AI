@@ -91,6 +91,18 @@ def _get_reranker():
     return _reranker_model
 
 
+def _encode_query(model, query: str):
+    """Encode a query with the model's retrieval prompt when it provides one."""
+    encode_kwargs = {
+        "normalize_embeddings": True,
+        "show_progress_bar": False,
+        "batch_size": 1,
+    }
+    if "query" in getattr(model, "prompts", {}):
+        encode_kwargs["prompt_name"] = "query"
+    return model.encode(query, **encode_kwargs)
+
+
 def _validate_query(query: str) -> str:
     if not isinstance(query, str):
         raise TypeError("query must be a string")
@@ -329,7 +341,7 @@ def _retrieve_once(
 
     try:
         model = _get_embed_model()
-        query_vec = model.encode(query, normalize_embeddings=True, show_progress_bar=False, batch_size=1)
+        query_vec = _encode_query(model, query)
         if hasattr(query_vec, "tolist"):
             query_vec = query_vec.tolist()
         if not isinstance(query_vec, list) or len(query_vec) != EMBEDDING_DIM:
@@ -378,7 +390,7 @@ def _retrieve_once(
 
 
 class RetrievalService:
-    """Reusable public boundary for MiniLM + PostgreSQL hybrid retrieval.
+    """Reusable public boundary for Qwen3 + PostgreSQL hybrid retrieval.
 
     The underlying embedding and reranker models are process-level lazy
     singletons, so constructing a service is cheap and repeated discussion
