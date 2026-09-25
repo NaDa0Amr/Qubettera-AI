@@ -25,7 +25,6 @@ class TestRetrievalTool(unittest.TestCase):
                 "title": "MoE Efficiency Study",
                 "source_url": "https://arxiv.org/abs/2101.03961",
                 "similarity": 0.88,
-                "distance": 0.12,
             }
         ]
 
@@ -40,7 +39,7 @@ class TestRetrievalTool(unittest.TestCase):
         self.assertEqual(doc["title"], "MoE Efficiency Study")
         self.assertEqual(doc["url"], "https://arxiv.org/abs/2101.03961")
         self.assertAlmostEqual(doc["score"], 0.88)
-        self.assertAlmostEqual(doc["distance"], 0.12)
+        self.assertNotIn("distance", doc)
 
     @patch("qubettera.agents.tools.retrieval_tool.retrieve")
     def test_failed_retrieval_returns_error_envelope(self, mock_retrieve) -> None:
@@ -141,3 +140,85 @@ class TestCrawlTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRetrievalRelevanceGate(unittest.TestCase):
+    """The gate must read ``similarity``, the field retrieval actually returns.
+
+    It previously read ``distance``, which no retrieval code path produces, so
+    the condition was always true and query regeneration never ran.
+    """
+
+    @patch("qubettera.agents.tools.retrieval_tool._regenerate_query_with_llm")
+    @patch("qubettera.agents.tools.retrieval_tool.retrieve")
+    def test_weak_similarity_triggers_regeneration(self, mock_retrieve, mock_regen) -> None:
+        from qubettera.agents.tools.retrieval_tool import MIN_TOP_SIMILARITY
+
+        self.assertLess(0.31, MIN_TOP_SIMILARITY)
+        mock_retrieve.return_value = [
+            {"rank": 1, "text": "weak", "title": "T", "url": "https://e.test/a", "similarity": 0.31}
+        ]
+        mock_regen.return_value = "better query"
+
+        raw = knowledge_retrieval.invoke({"query": "vague query", "top_k": 1})
+        data = json.loads(raw)
+
+        self.assertTrue(mock_regen.called, "a weak top match must trigger regeneration")
+        self.assertTrue(data["query_regenerated"])
+        self.assertEqual(data["regenerated_query"], "better query")
+
+    @patch("qubettera.agents.tools.retrieval_tool._regenerate_query_with_llm")
+    @patch("qubettera.agents.tools.retrieval_tool.retrieve")
+    def test_strong_similarity_skips_regeneration(self, mock_retrieve, mock_regen) -> None:
+        mock_retrieve.return_value = [
+            {"rank": 1, "text": "good", "title": "T", "url": "https://e.test/b", "similarity": 0.72}
+        ]
+
+        raw = knowledge_retrieval.invoke({"query": "precise query", "top_k": 1})
+        data = json.loads(raw)
+
+        self.assertFalse(mock_regen.called, "a strong top match must not burn an extra LLM call")
+        self.assertNotIn("query_regenerated", data)
+
+    @patch("qubettera.agents.tools.retrieval_tool._regenerate_query_with_llm")
+    @patch("qubettera.agents.tools.retrieval_tool.retrieve")
+    def test_empty_results_trigger_regeneration(self, mock_retrieve, mock_regen) -> None:
+        mock_retrieve.return_value = []
+        mock_regen.return_value = "retry query"
+
+        knowledge_retrieval.invoke({"query": "nothing", "top_k": 1})
+
+        self.assertTrue(mock_regen.called)
+
+    @patch("qubettera.agents.tools.retrieval_tool._regenerate_query_with_llm")
+    @patch("qubettera.agents.tools.retrieval_tool.retrieve")
+    def test_missing_similarity_is_treated_as_relevant(self, mock_retrieve, mock_regen) -> None:
+        # An unexpected schema change must not silently disable retrieval.
+        mock_retrieve.return_value = [{"rank": 1, "text": "no score", "title": "T"}]
+
+        knowledge_retrieval.invoke({"query": "query", "top_k": 1})
+
+        self.assertFalse(mock_regen.called)
+
+    @patch("qubettera.agents.tools.retrieval_tool.retrieve")
+    def test_retry_is_adopted_only_when_it_improves_the_top_match(self, mock_retrieve) -> None:
+        from qubettera.agents.tools.retrieval_tool import MIN_TOP_SIMILARITY
+
+        weak = [{"rank": 1, "text": "weak", "title": "W", "similarity": MIN_TOP_SIMILARITY - 0.1}]
+        worse = [{"rank": 1, "text": "worse", "title": "X", "similarity": MIN_TOP_SIMILARITY - 0.2}]
+        better = [{"rank": 1, "text": "better", "title": "Y", "similarity": MIN_TOP_SIMILARITY + 0.2}]
+
+        with patch(
+            "qubettera.agents.tools.retrieval_tool._regenerate_query_with_llm",
+            return_value="rewritten",
+        ):
+            # A worse retry must not replace the original results (higher
+            # similarity is better, so the comparison direction matters).
+            mock_retrieve.side_effect = [weak, worse]
+            data = json.loads(knowledge_retrieval.invoke({"query": "q", "top_k": 1}))
+            self.assertEqual(data["documents"][0]["text"], "weak")
+
+            # An improved retry is adopted.
+            mock_retrieve.side_effect = [weak, better]
+            data = json.loads(knowledge_retrieval.invoke({"query": "q", "top_k": 1}))
+            self.assertEqual(data["documents"][0]["text"], "better")

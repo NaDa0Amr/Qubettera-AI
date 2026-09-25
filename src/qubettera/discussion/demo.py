@@ -14,8 +14,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -27,65 +25,15 @@ load_dotenv(override=True)
 
 from .agent_graph import AgentGraph
 from .config import load_discussion_config
+from .console_stream import ConsoleTurnStream, resolve_persona_names
 from .fakes import DeterministicAgentRuntime, DeterministicRetrievalProvider
-from .interfaces import EventSink, NoRetrievalProvider
+from .interfaces import NoRetrievalProvider
 from .orchestrator import DiscussionOrchestrator
+from .output_naming import discussion_log_filename
 from .run_log import JsonlEventSink
 
 from qubettera.agents.graph_builder import GraphBuilder
 from qubettera.paths import CONFIGS_DIR, OUTPUTS_DIR
-
-
-def _persona_names(agent_ids: tuple[str, ...]) -> dict[str, str]:
-    """Resolve display names from personas/<id>.json without importing the LangGraph stack."""
-    names: dict[str, str] = {}
-    for agent_id in agent_ids:
-        path = Path("personas") / f"{agent_id}.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            names[agent_id] = agent_id
-        else:
-            names[agent_id] = payload.get("name", agent_id)
-    return names
-
-
-class ConsoleTurnStream:
-    """Print completed turns live while delegating writes to the wrapped sink."""
-
-    OPINION_LIMIT = 500
-    QUERY_LIMIT = 120
-
-    def __init__(self, sink: EventSink, persona_names: dict[str, str]):
-        self._sink = sink
-        self._persona_names = persona_names
-
-    def write_event(self, event: dict) -> None:
-        if event.get("event") == "discussion_started":
-            config = event.get("config", {})
-            print(f"\nDebate starting: {len(config.get('participant_ids', []))} agents "
-                  f"over {config.get('num_rounds', 0)} rounds.\n")
-        elif event.get("event") == "turn_completed":
-            self._print_turn(event["message"])
-        self._sink.write_event(event)
-
-    def _print_turn(self, message: dict) -> None:
-        sender_id = message["sender_id"]
-        sender = self._persona_names.get(sender_id, sender_id)
-        if message["phase"] == "initial":
-            stage = "opening"
-        else:
-            stage = f"round {message['round_number']}"
-        recipients = ", ".join(message["recipient_ids"]) or "(nobody)"
-        header = (f"[{stage}] {sender} ({sender_id}) -> {recipients}")
-        print(f"\n{header}\n{'-' * 70}")
-        opinion = message["opinion"]
-        print(opinion[: self.OPINION_LIMIT] + "..." if len(opinion) > self.OPINION_LIMIT else opinion)
-        if message.get("retrieval_query"):
-            query = message["retrieval_query"]
-            print(f"[retrieval] {query[: self.QUERY_LIMIT]}..." if len(query) > self.QUERY_LIMIT else f"[retrieval] {query}")
-        if message.get("evidence"):
-            print(f"[evidence] {len(message['evidence'])} item(s)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,11 +103,17 @@ def main() -> int:
         retrieval_provider = DeterministicRetrievalProvider()
 
     graph = _build_graph(args, config.participant_ids)
-    persona_names = _persona_names(config.participant_ids)
+    persona_names = resolve_persona_names(config.participant_ids)
     discussion_id = str(uuid4())
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    num_agents = len(config.participant_ids)
-    output_filename = f"demo-{args.mode}-{args.topology}-{num_agents}agents-{timestamp}.jsonl"
+    output_filename = discussion_log_filename(
+        mode=args.mode,
+        num_agents=len(config.participant_ids),
+        num_rounds=config.num_rounds,
+        discussion_id=discussion_id,
+        # The demo is the only entry point that can vary the topology, so it
+        # carries that extra context in the prefix.
+        prefix=f"demo-{args.topology}-",
+    )
     output_path = Path(args.output_dir) / output_filename
 
     orchestrator = DiscussionOrchestrator(

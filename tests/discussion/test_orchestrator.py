@@ -132,3 +132,28 @@ def test_parallel_stages_keep_deterministic_message_order(tmp_path):
     assert [message.sender_id for message in result.messages[:5]] == list(
         result.config.participant_ids
     )
+
+
+def test_only_the_last_discussion_round_is_marked_final(tmp_path):
+    config = load_discussion_config("resources/configs/discussion.json")
+    orchestrator, runtime, _ = build_orchestrator(tmp_path)
+
+    orchestrator.run(config)
+
+    # The initial snapshot is not a discussion round and must never be final.
+    assert all(
+        not request.is_final_round
+        for request in runtime.requests
+        if request.phase == "initial"
+    )
+    for round_number in (1, 2):
+        assert all(
+            not request.is_final_round
+            for request in runtime.requests
+            if request.round_number == round_number
+        )
+    assert all(
+        request.is_final_round
+        for request in runtime.requests
+        if request.round_number == config.num_rounds
+    )

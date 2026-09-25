@@ -1,0 +1,37 @@
+{
+  "brief": {
+    "objective": "Design a serving stack that runs a 7B-parameter open-weight LLM at a 32,768-token context window on a single NVIDIA A100 40 GB GPU, serving at least 8 concurrent requests.",
+    "constraints": [
+      "One NVIDIA A100 GPU with 40 GB of HBM. All weights, KV cache, and activations must fit.",
+      "The 32k context window is a hard product requirement and cannot be reduced.",
+      "At least 8 concurrent requests must be served without preemption.",
+      "Target interactive latency: under 2 seconds time-to-first-token (TTFT)."
+    ],
+    "topics": [
+      "KV cache size: how many bytes per token, and how attention variants (MHA vs GQA vs MQA) change the budget.",
+      "Whether to quantize the KV cache or the weights, and the quality cost of doing so.",
+      "PagedAttention and continuous batching versus static batching.",
+      "Chunked prefill and prefill/decode scheduling to hold the TTFT target.",
+      "When to fall back to a shorter context plus retrieval instead of full 32k attention."
+    ],
+    "strict_notes": [
+      "Use retrieved evidence for factual technical claims.",
+      "Cite exact sources and do not invent citations.",
+      "State uncertainty when the supplied evidence does not settle a claim.",
+      "Show the arithmetic for any memory budget claim."
+    ]
+  },
+  "participant_ids": [
+    "dr_aris",
+    "prof_elena",
+    "systems_specialist",
+    "hybrid_architect",
+    "grad_student"
+  ],
+  "num_rounds": 3,
+  "model_config": {
+    "temperature_env": "LLM_TEMPERATURE",
+    "provider_env": "LLM_PROVIDER",
+    "model_env": "LLM_MODEL"
+  }
+}

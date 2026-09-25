@@ -299,7 +299,7 @@ def extract_tool_calls_trace(messages: list[Any]) -> list[dict[str, Any]]:
             elif status == "EMPTY":
                 summary = "No documents matched the query"
             elif status == "LIMIT_REACHED":
-                summary = "Web search limit reached (capped at 5 per agent)"
+                summary = "Web search limit reached (capped per turn)"
             else:
                 summary = f"Tool execution failed: {error or 'unknown error'}"
 
@@ -465,6 +465,7 @@ def stream_graph_with_trace(
                 new_retrieved = node_output.get("retrieved_docs", [])
                 new_web = node_output.get("web_documents", [])
                 total_chunks = len(new_retrieved) + len(new_web)
+                node_messages = node_output.get("messages", [])
                 step_trace.append({
                     "step": step_num,
                     "node": "tools",
@@ -473,15 +474,43 @@ def stream_graph_with_trace(
                     "web_documents_count": len(new_web),
                     "total_sources_received": total_chunks,
                     "queries": list(node_output.get("retrieval_queries", [])),
+                    "kb_rounds_used": node_output.get("kb_rounds_used"),
+                    "web_rounds_used": node_output.get("web_rounds_used"),
+                    "web_searches_used": node_output.get("web_searches_used"),
+                    "kb_insufficient": node_output.get("kb_insufficient"),
                 })
                 print(f"  [{step_num}] 🔧 [Tool Node] Executed tools -> Received {total_chunks} grounded evidence source(s).")
-                for m in node_output.get("messages", []):
+                # The KB-first ladder can decline a call outright; without this
+                # the run reads as if the agent simply chose not to search.
+                for m in node_messages:
+                    content_str = str(getattr(m, "content", ""))
+                    if "Knowledge-base first" in content_str:
+                        print("       ⏸️  [KB-First] Web tool skipped until the knowledge base has been consulted.")
+                    elif "Web round budget spent" in content_str:
+                        print("       ⏸️  [Web Budget] Web round skipped: this turn's web rounds are spent.")
+                    elif "Web search limit reached" in content_str:
+                        print("       ⏸️  [Web Budget] Web search skipped: the per-turn search limit is spent.")
+                    elif "Knowledge-base round budget spent" in content_str:
+                        print("       ⏸️  [KB Budget] Retrieval skipped: this turn's knowledge-base round is spent.")
+                rounds = node_output.get("kb_rounds_used")
+                web_rounds = node_output.get("web_rounds_used")
+                if rounds is not None or web_rounds is not None:
+                    print(
+                        f"       📊 [Turn Budget] KB rounds used: {rounds} | "
+                        f"web rounds used: {web_rounds} | "
+                        f"web searches used: {node_output.get('web_searches_used')}"
+                    )
+                for m in node_messages:
                     content_str = str(getattr(m, "content", ""))
                     if "query_regenerated" in content_str:
                         try:
                             env = json.loads(content_str)
                             if env.get("query_regenerated"):
                                 print(f"       🔄 [LLM Query Reformulation] Low relevance on '{env.get('original_query')}' -> Regenerated to: '{env.get('regenerated_query')}'")
+                            if env.get("insufficient"):
+                                top = env.get("top_similarity")
+                                detail = f" (top similarity {top:.3f})" if isinstance(top, (int, float)) else ""
+                                print(f"       ⚠️  [KB Quality] Knowledge base could not ground this turn{detail}; the web fallback is permitted.")
                         except Exception:
                             pass
                 for doc in new_retrieved[:3]:

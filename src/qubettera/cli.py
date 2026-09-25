@@ -68,9 +68,11 @@ def _run_discussion(args: argparse.Namespace) -> int:
 
     from qubettera.discussion.agent_graph import AgentGraph
     from qubettera.discussion.config import load_discussion_config
+    from qubettera.discussion.console_stream import ConsoleTurnStream, resolve_persona_names
     from qubettera.discussion.fakes import DeterministicAgentRuntime, DeterministicRetrievalProvider
     from qubettera.discussion.interfaces import NoRetrievalProvider
     from qubettera.discussion.orchestrator import DiscussionOrchestrator
+    from qubettera.discussion.output_naming import discussion_log_filename
     from qubettera.discussion.run_log import JsonlEventSink
 
     config = load_discussion_config(args.discussion)
@@ -86,15 +88,24 @@ def _run_discussion(args: argparse.Namespace) -> int:
         retrieval_provider = TeamRetrievalProvider()
     if args.no_retrieval:
         retrieval_provider = NoRetrievalProvider()
-    output = Path(args.output_dir) / f"{discussion_id}.jsonl"
+    output = Path(args.output_dir) / discussion_log_filename(
+        mode=args.mode,
+        num_agents=len(config.participant_ids),
+        num_rounds=config.num_rounds,
+        discussion_id=discussion_id,
+    )
+    print(f"Objective: {config.brief.objective}")
+    print(f"Teammates: {', '.join(config.participant_ids)} | rounds: {config.num_rounds}")
     result = DiscussionOrchestrator(
         graph=graph,
         agent_runtime=runtime,
         retrieval_provider=retrieval_provider,
-        event_sink=JsonlEventSink(output),
+        event_sink=ConsoleTurnStream(
+            JsonlEventSink(output), resolve_persona_names(config.participant_ids)
+        ),
         id_factory=lambda: discussion_id,
     ).run(config)
-    print(f"Discussion {result.discussion_id}: {result.status} ({len(result.messages)} messages)")
+    print(f"\nDiscussion {result.discussion_id}: {result.status} ({len(result.messages)} messages)")
     print(f"Event log: {output}")
     return 0
 

@@ -19,6 +19,25 @@ from qubettera.rag.retrieve import retrieve as retrieve_from_rag
 
 logger = logging.getLogger(__name__)
 
+# Minimum cosine similarity for the top result to count as a real match. The
+# hybrid retrieval service returns ``similarity`` but never ``distance``, and
+# ``rrf_score`` is rank-normalised (it stays flat regardless of match quality),
+# so it cannot be used as a relevance signal.
+MIN_TOP_SIMILARITY = 0.50
+
+
+def _top_similarity(results: list[dict[str, Any]]) -> float | None:
+    """Return the top result's similarity, or None when unavailable."""
+    if not results:
+        return None
+    raw = results[0].get("similarity")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
 
 def retrieve(query: str, top_k: int = 5, rerank: bool = False) -> list[dict[str, Any]]:
     """Execute Qwen3 + PostgreSQL hybrid retrieval."""
@@ -53,37 +72,41 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
     """Search the local Qwen3/PostgreSQL knowledge base for grounded evidence.
 
     Use a focused natural-language query. Results contain text, title, source
-    URL, and distance score. Returns a JSON string with a 'documents' list.
+    URL, and similarity score. Returns a JSON string with a 'documents' list.
     Falls back to an error envelope when the service is unreachable.
     """
     try:
         results = retrieve(query, top_k=top_k, rerank=rerank)
 
-        # Check if results are relevant: must be non-empty and have good distance (<= 0.40)
-        is_relevant = bool(results) and (
-            results[0].get("distance") is None or float(results[0].get("distance", 1.0)) <= 0.40
-        )
+        # Relevance gate: the top hit must clear MIN_TOP_SIMILARITY. Results that
+        # carry no similarity are treated as relevant so an unexpected schema
+        # change cannot silently disable retrieval.
+        top_similarity = _top_similarity(results)
+        is_relevant = bool(results) and (top_similarity is None or top_similarity >= MIN_TOP_SIMILARITY)
         query_regenerated = False
         effective_query = query
 
         if not is_relevant:
-            reason = "no chunks found" if not results else f"weak similarity (distance={results[0].get('distance')})"
+            reason = "no chunks found" if not results else f"weak similarity (top={top_similarity:.3f})"
             logger.info("Retrieval for '%s' returned no/weak relevant chunks (%s). Regenerating query via LLM...", query, reason)
             regenerated = _regenerate_query_with_llm(query, reason=reason)
             if regenerated:
                 logger.info("Regenerated retrieval query: '%s' -> '%s'", query, regenerated)
                 retry_results = retrieve(regenerated, top_k=top_k, rerank=rerank)
                 if retry_results:
-                    prev_dist = float(results[0].get("distance", 1.0)) if results and results[0].get("distance") is not None else 1.0
-                    new_dist = float(retry_results[0].get("distance", 1.0)) if retry_results[0].get("distance") is not None else 0.0
-                    if not results or new_dist <= prev_dist:
+                    # Higher similarity is better, so only adopt the retry when it
+                    # does not make the top match worse.
+                    new_similarity = _top_similarity(retry_results)
+                    if not results or new_similarity is None or (
+                        top_similarity is not None and new_similarity >= top_similarity
+                    ):
                         results = retry_results
                     query_regenerated = True
                     effective_query = regenerated
 
         documents = []
         for i, r in enumerate(results, start=1):
-            score = r.get("rrf_score") or r.get("similarity") or r.get("distance")
+            score = r.get("similarity") or r.get("rrf_score")
             # Log full chunk text without truncation
             text_val = str(r.get("text") or "").strip()
             documents.append(
@@ -93,11 +116,16 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
                     "title": str(r.get("title") or ""),
                     "url": str(r.get("source_url") or r.get("url") or ""),
                     "score": float(score) if score is not None else None,
-                    "distance": r.get("distance"),
                 }
             )
 
         envelope: dict[str, Any] = {"documents": documents}
+        # Expose KB quality so the graph can apply the KB-first web ladder: when
+        # the best hit is below MIN_TOP_SIMILARITY the turn is treated as
+        # "KB insufficient", which permits live_web_search even though the KB
+        # tool round was already spent.
+        envelope["top_similarity"] = top_similarity
+        envelope["insufficient"] = not is_relevant
         if query_regenerated:
             envelope["query_regenerated"] = True
             envelope["original_query"] = query
@@ -112,6 +140,10 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
             {
                 "documents": [],
                 "error": f"knowledge base unreachable: {error_type}",
+                # An unreachable KB cannot ground a claim, so the web fallback
+                # must be permitted rather than blocked by the spent KB round.
+                "insufficient": True,
+                "top_similarity": None,
             }
         )
 

@@ -275,6 +275,7 @@ class DiscussionOrchestrator:
             brief=config.brief,
             incoming_messages=incoming_messages,
             previous_opinion=previous_opinion,
+            is_final_round=round_number >= config.num_rounds,
         )
 
         query = self.retrieval_provider.build_query(request)

@@ -68,7 +68,12 @@ def get_persona_by_id(personas: List[Dict[str, Any]], persona_id: str) -> Dict[s
     return matches[0]
 
 
-def extract_opinion(result: Dict[str, Any]) -> str:
+def extract_opinion(
+    result: Dict[str, Any],
+    *,
+    since: int | None = None,
+    allow_history: bool = True,
+) -> str:
     """
     Safely extract the final opinion from a LangGraph result dictionary.
     
@@ -79,6 +84,14 @@ def extract_opinion(result: Dict[str, Any]) -> str:
     
     Args:
         result: The result dictionary returned by graph.invoke().
+        since: Index of the first message belonging to the current turn. When
+            given, the reverse scan cannot look before it. A discussion agent's
+            thread is checkpointed for the whole discussion, so without this
+            boundary an empty response would resolve to a *previous turn's*
+            opinion and be republished as if it were this turn's.
+        allow_history: When False, a turn with no usable output returns an empty
+            string instead of falling back to older turns. Callers that need to
+            detect a genuinely empty turn (and retry or fail) pass False.
         
     Returns:
         The extracted opinion text, or an empty string if none found.
@@ -92,7 +105,16 @@ def extract_opinion(result: Dict[str, Any]) -> str:
 
     # 2. Scan messages in reverse for the last assistant message with actual opinion content
     messages = result.get("messages", [])
-    for msg in reversed(messages):
+    if since is not None and not allow_history:
+        window = list(messages[since:])
+    elif allow_history:
+        window = list(messages)
+    else:
+        # No boundary given and history is disallowed: there is nothing
+        # this turn can be shown to have produced.
+        return ""
+
+    for msg in reversed(window):
         is_assistant = (
             isinstance(msg, AIMessage)
             or getattr(msg, "type", "") == "ai"

@@ -8,8 +8,7 @@ Priorities:
 
 Grounding Evidence:
 {% for document in documents | default(retrieved_docs) %}
-Evidence {{ loop.index }}
-Title: {{ document.title }}
+[{{ loop.index }}] {{ document.title }}
 Source URL: {{ document.url | default(document.source) }}
 Text: {{ document.text }}
 {% endfor %}
@@ -22,8 +21,10 @@ Text: {{ document.text }}
 {% endif %}
 
 Write the persona's technical opinion on the topic. Ground factual claims in
-the evidence above. Cite a source as `[Source: URL]`, copying its Source URL
-exactly; never reconstruct or invent a URL. If any evidence cuts against the
-persona's stance, acknowledge that counter-evidence explicitly before explaining
-the persona's conclusion. Do not mention the persona's name merely to create an
-artificial difference in output.
+the evidence above. Cite evidence using its bracketed reference: either the
+number shown above (for example `[2]`) or the paper identifier already in the
+title (for example `[2604.21330]`). An evidence number `[n]` refers to item `n`
+of the evidence list; never invent a reference that is not listed above. If any
+evidence cuts against the persona's stance, acknowledge that counter-evidence
+explicitly before explaining the persona's conclusion. Do not mention the
+persona's name merely to create an artificial difference in output.
