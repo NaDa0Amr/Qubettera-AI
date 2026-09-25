@@ -66,3 +66,18 @@ def test_round_two_query_reflects_round_one_messages_not_only_the_original_topic
     # configured graph; their round-1 output must show up in the round-2 query.
     assert "prof_elena" in round_two_query
     assert "grad_student" in round_two_query
+
+
+def test_evidence_scores_come_from_the_fields_retrieval_actually_returns():
+    """Retrieval reports similarity/rrf/rerank scores, never ``distance``, so
+    reading only ``distance`` left every evidence score as None."""
+    from qubettera.discussion.retrieval_provider import TeamRetrievalProvider
+
+    to_evidence = TeamRetrievalProvider._to_evidence
+
+    assert to_evidence({"text": "a", "similarity": 0.75}).score == 0.75
+    assert to_evidence({"text": "a", "rrf_score": 0.25, "similarity": 0.75}).score == 0.75
+    assert to_evidence({"text": "a", "similarity": 0.75, "rerank_score": 3.5}).score == 3.5
+    assert to_evidence({"text": "a", "score": 0.4}).score == 0.4
+    assert to_evidence({"text": "a"}).score is None
+    assert "similarity" not in to_evidence({"text": "a", "similarity": 0.75}).metadata

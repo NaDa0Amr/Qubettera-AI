@@ -5,6 +5,7 @@ import json
 import math
 import re
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,10 +20,12 @@ if __package__ in {None, ""}:
         EMBEDDING_MODEL,
         EMBEDDING_MODEL_REVISION,
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
+        MAX_QUERY_CHARS,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
         RERANKER_MODEL,
         RERANKER_MODEL_REVISION,
+        get_embedding_device,
     )
 else:
     from .database import connect as connect_database
@@ -32,10 +35,12 @@ else:
         EMBEDDING_MODEL,
         EMBEDDING_MODEL_REVISION,
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
+        MAX_QUERY_CHARS,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
         RERANKER_MODEL,
         RERANKER_MODEL_REVISION,
+        get_embedding_device,
     )
 
 def get_db_config() -> dict:
@@ -51,6 +56,10 @@ RERANK_SOURCE_LIMIT = 2
 FINAL_SOURCE_LIMIT = 1
 _embed_model = None
 _reranker_model = None
+# Discussion turns retrieve concurrently from a thread pool, so the lazy model
+# singletons below must be guarded: without a lock every worker sees a None
+# cache entry and loads a full copy of the weights, which exhausts GPU memory.
+_model_lock = threading.Lock()
 
 
 def get_connection():
@@ -60,35 +69,53 @@ def get_connection():
 def _get_embed_model():
     global _embed_model
     if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        try:
-            _embed_model = SentenceTransformer(
-                EMBEDDING_MODEL,
-                revision=EMBEDDING_MODEL_REVISION,
-                local_files_only=True,
-            )
-        except (OSError, ValueError):
-            _embed_model = SentenceTransformer(
-                EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION
-            )
+        with _model_lock:
+            if _embed_model is None:
+                _embed_model = _build_embed_model()
     return _embed_model
+
+
+def _build_embed_model():
+    from sentence_transformers import SentenceTransformer
+
+    device = get_embedding_device()
+    try:
+        return SentenceTransformer(
+            EMBEDDING_MODEL,
+            revision=EMBEDDING_MODEL_REVISION,
+            device=device,
+            local_files_only=True,
+        )
+    except (OSError, ValueError):
+        return SentenceTransformer(
+            EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION, device=device
+        )
 
 
 def _get_reranker():
     global _reranker_model
     if _reranker_model is None:
-        from sentence_transformers import CrossEncoder
-        try:
-            _reranker_model = CrossEncoder(
-                RERANKER_MODEL,
-                revision=RERANKER_MODEL_REVISION,
-                local_files_only=True,
-            )
-        except (OSError, ValueError):
-            _reranker_model = CrossEncoder(
-                RERANKER_MODEL, revision=RERANKER_MODEL_REVISION
-            )
+        with _model_lock:
+            if _reranker_model is None:
+                _reranker_model = _build_reranker()
     return _reranker_model
+
+
+def _build_reranker():
+    from sentence_transformers import CrossEncoder
+
+    device = get_embedding_device()
+    try:
+        return CrossEncoder(
+            RERANKER_MODEL,
+            revision=RERANKER_MODEL_REVISION,
+            device=device,
+            local_files_only=True,
+        )
+    except (OSError, ValueError):
+        return CrossEncoder(
+            RERANKER_MODEL, revision=RERANKER_MODEL_REVISION, device=device
+        )
 
 
 def _encode_query(model, query: str):
@@ -109,8 +136,10 @@ def _validate_query(query: str) -> str:
     normalized = query.strip()
     if not normalized:
         raise ValueError("query must be a non-empty string")
-    if len(normalized) > 512:
-        raise ValueError("query is too long; limit is 512 characters")
+    if len(normalized) > MAX_QUERY_CHARS:
+        raise ValueError(
+            f"query is too long; limit is {MAX_QUERY_CHARS} characters"
+        )
     return normalized
 
 

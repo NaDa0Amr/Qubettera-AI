@@ -1,20 +1,60 @@
 {
-  "mode": "curated_only",
-  "curated_seeds": 43,
-  "discovered": 43,
-  "preserved": 819,
-  "already_present": 41,
-  "refresh_attempted": 1,
-  "attempted": 2,
-  "new_written": 1,
-  "written": 819,
+  "mode": "curated_plus_discovery",
+  "curated_seeds": 110,
+  "discovered": 834,
+  "preserved": 0,
+  "already_present": 0,
+  "refresh_attempted": 0,
+  "attempted": 834,
+  "fetched_success": 833,
+  "new_sources_written": 833,
+  "replacements_written": 0,
+  "written": 829,
   "domains": {
-    "huggingface.co": {
-      "failure": 1
-    },
     "arxiv.org": {
+      "success": 543,
+      "ar5iv": 539,
+      "pdf": 4
+    },
+    "huggingface.co": {
+      "success": 16,
+      "html": 16
+    },
+    "lilianweng.github.io": {
+      "success": 12,
+      "html": 12
+    },
+    "openai.com": {
       "success": 1,
-      "pdf": 1
+      "html": 1
+    },
+    "www.anthropic.com": {
+      "success": 10,
+      "html": 10
+    },
+    "deepmind.google": {
+      "success": 13,
+      "html": 13
+    },
+    "ai.meta.com": {
+      "success": 34,
+      "html": 34
+    },
+    "mistral.ai": {
+      "success": 90,
+      "html": 90
+    },
+    "qwenlm.github.io": {
+      "success": 5,
+      "html": 5
+    },
+    "sebastianraschka.com": {
+      "success": 83,
+      "html": 83
+    },
+    "jalammar.github.io": {
+      "success": 26,
+      "html": 26
     }
   },
   "js_rendering_candidates": [

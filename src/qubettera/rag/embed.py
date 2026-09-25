@@ -37,6 +37,7 @@ from qubettera.rag.settings import (
     EMBEDDING_MODEL_REVISION,
     PIPELINE_VERSION,
     PREPROCESSING_VERSION,
+    get_embedding_device,
 )
 from qubettera.rag.contextual_text import build_contextual_text
 from qubettera.rag.jsonl import (
@@ -165,15 +166,17 @@ def load_embedding_model():
     """Prefer an existing Hugging Face cache and download only when absent."""
     from sentence_transformers import SentenceTransformer
 
+    device = get_embedding_device()
     try:
         return SentenceTransformer(
             MODEL_NAME,
             revision=MODEL_REVISION,
+            device=device,
             local_files_only=True,
         )
     except (OSError, ValueError):
         print("Embedding model is not complete in the local cache; downloading it now.")
-        return SentenceTransformer(MODEL_NAME, revision=MODEL_REVISION)
+        return SentenceTransformer(MODEL_NAME, revision=MODEL_REVISION, device=device)
 
 
 def run():

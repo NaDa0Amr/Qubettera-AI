@@ -7,18 +7,35 @@ uses the same Qwen3/PostgreSQL retrieval service as the agent workflow.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from qubettera.agents.personas.loader import PersonaConfigError, load_persona
 from qubettera.rag.retrieve import RetrievalService
+from qubettera.rag.settings import MAX_QUERY_CHARS
 
 from .models import EvidenceItem, TurnRequest
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
-_MAX_QUERY_CHARS = 1_800
+_ENV_TOP_K = "DISCUSSION_TOP_K"
+# The composite query must fit the shared retrieval limit, with headroom for
+# the separator that joins the truncated components.
+_MAX_QUERY_CHARS = MAX_QUERY_CHARS
 _MAX_COMPONENT_CHARS = 280
+
+
+def discussion_top_k() -> int:
+    """Return the per-turn evidence budget from ``DISCUSSION_TOP_K``."""
+    raw = os.environ.get(_ENV_TOP_K, str(DEFAULT_TOP_K))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{_ENV_TOP_K} must be an integer, got {raw!r}") from exc
+    if value <= 0:
+        raise RuntimeError(f"{_ENV_TOP_K} must be greater than zero.")
+    return value
 
 
 class TeamRetrievalProvider:
@@ -37,10 +54,10 @@ class TeamRetrievalProvider:
     def __init__(
         self,
         *,
-        top_k: int = DEFAULT_TOP_K,
+        top_k: int | None = None,
         retrieval_service: RetrievalService | None = None,
     ):
-        self.top_k = top_k
+        self.top_k = discussion_top_k() if top_k is None else top_k
         self._service = retrieval_service or RetrievalService()
 
     def build_query(self, request: TurnRequest) -> str:
@@ -111,9 +128,25 @@ class TeamRetrievalProvider:
 
     @staticmethod
     def _to_evidence(document: dict[str, Any]) -> EvidenceItem:
-        known = {"text", "title", "url", "source_url", "score", "distance"}
+        known = {
+            "text",
+            "title",
+            "url",
+            "source_url",
+            "score",
+            "distance",
+            "similarity",
+            "rrf_score",
+            "text_rank_score",
+            "rerank_score",
+        }
         metadata = {key: value for key, value in document.items() if key not in known}
-        raw_score = document.get("distance", document.get("score"))
+        # Retrieval reports similarity/rrf_score/rerank_score, not distance.
+        raw_score = document.get("rerank_score")
+        if raw_score is None:
+            raw_score = document.get("similarity")
+        if raw_score is None:
+            raw_score = document.get("score")
         try:
             score = float(raw_score) if raw_score is not None else None
         except (TypeError, ValueError):

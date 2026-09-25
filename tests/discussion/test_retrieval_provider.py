@@ -1,3 +1,5 @@
+import pytest
+
 from qubettera.discussion.models import DiscussionBrief, RoutedMessage, TurnRequest
 from qubettera.discussion.retrieval_provider import TeamRetrievalProvider
 
@@ -97,7 +99,7 @@ def test_retrieve_converts_documents_to_evidence_with_preserved_fields():
     assert item.text == "MoE activates a subset of experts per token."
     assert item.title == "MoE Systems"
     assert item.url == "https://example.org/moe"
-    assert item.score is None
+    assert item.score == 0.79
     assert item.metadata.get("topic") == "experts"
 
 
@@ -148,3 +150,38 @@ def test_retrieve_propagates_only_expected_configuration_errors(monkeypatch):
     request = make_request()
 
     assert provider.retrieve("some query", request) == ()
+
+
+def test_top_k_defaults_to_five_and_is_configurable(monkeypatch):
+    monkeypatch.delenv("DISCUSSION_TOP_K", raising=False)
+    assert TeamRetrievalProvider().top_k == 5
+
+    monkeypatch.setenv("DISCUSSION_TOP_K", "12")
+    assert TeamRetrievalProvider().top_k == 12
+
+    # An explicit argument still wins over the environment.
+    assert TeamRetrievalProvider(top_k=3).top_k == 3
+
+
+def test_top_k_env_is_validated(monkeypatch):
+    monkeypatch.setenv("DISCUSSION_TOP_K", "lots")
+    with pytest.raises(RuntimeError, match="must be an integer"):
+        TeamRetrievalProvider()
+
+    monkeypatch.setenv("DISCUSSION_TOP_K", "0")
+    with pytest.raises(RuntimeError, match="greater than zero"):
+        TeamRetrievalProvider()
+
+
+def test_configured_top_k_is_used_for_retrieval(monkeypatch):
+    monkeypatch.setenv("DISCUSSION_TOP_K", "2")
+    rows = [
+        {"text": f"passage {index}", "url": f"https://example.org/{index}", "title": "T"}
+        for index in range(5)
+    ]
+    service = FakeRetrievalService(rows)
+    provider = TeamRetrievalProvider(retrieval_service=service)
+
+    evidence = provider.retrieve("MoE memory efficiency", make_request())
+
+    assert len(evidence) == 2

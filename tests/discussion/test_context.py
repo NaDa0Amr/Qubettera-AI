@@ -56,6 +56,20 @@ def test_render_evidence_block_handles_empty_and_populated():
     assert "Some passage." in rendered
 
 
+def test_render_evidence_block_numbers_items_in_order():
+    evidence = (
+        EvidenceItem(text="First passage.", title="Alpha", url="https://example.org/a"),
+        EvidenceItem(text="Second passage.", title="Beta", url="https://example.org/b"),
+        EvidenceItem(text="Third passage.", title="Gamma", url="https://example.org/c"),
+    )
+
+    rendered = render_evidence_block(evidence)
+
+    assert "[1] Alpha | https://example.org/a" in rendered
+    assert "[2] Beta | https://example.org/b" in rendered
+    assert "[3] Gamma | https://example.org/c" in rendered
+
+
 def test_render_turn_prompt_includes_previous_opinion_messages_and_evidence():
     brief = DiscussionBrief(
         objective="Pick an architecture.",

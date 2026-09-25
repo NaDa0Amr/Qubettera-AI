@@ -5,20 +5,28 @@ Review date: 2026-09-22
 ## Executive summary
 
 The repository now has a sensible unified shape: one installable `qubettera`
-package, one CLI, shared resources, a local MiniLM/PostgreSQL RAG subsystem, a
+package, one CLI, shared resources, a local Qwen3/PostgreSQL RAG subsystem, a
 Kaggle-hosted generation model, and a deterministic multi-agent discussion
-orchestrator. The automated suite is healthy (`138 passed, 1 skipped`). All 19
+orchestrator. The automated suite is healthy (`163 passed`). All 19
 JSON resource/baseline files parse, and all 11 individual personas validate.
 
 The system is not yet production-ready. The most important remaining problems
-are migrated paths that still resolve to old or incorrect locations, discussion
-retrieval queries that can exceed the retriever's hard limit and silently lose
-evidence, a relevance check that reads a score field the retriever does not
-produce, and the absence of real Postgres/Kaggle integration tests.
+are migrated paths that still resolve to old or incorrect locations, a relevance
+check that reads a score field the retriever does not produce, and the absence of
+real Postgres/Kaggle integration tests.
+
+Several correctness items have since been fixed and validated end to end by a
+live five-agent, three-round discussion run: the query-length contract is now
+one shared constant, the retrieval model singletons are thread-safe, and the
+debate-quality defects found by analyzing a recorded run are resolved (the
+tool-round budget and final-round framing are now separate concerns, ordinal
+citations resolve against a numbered evidence block, and the per-turn evidence
+budget is configurable). The live demo also surfaced the thread-safety defect,
+which the unit tests had not covered.
 
 Recommended order:
 
-1. Fix the four P0 correctness items below.
+1. Fix the remaining P0 correctness items below.
 2. Add live-service contract tests and improve `doctor`.
 3. Pool/batch retrieval work and measure quality against the stored baseline.
 4. Harden the remote endpoint and crawler before exposing the program as a
@@ -57,46 +65,60 @@ document. Their pipeline metadata and stored evaluation report were reviewed.
 
 ### 1. Discussion queries can exceed the retriever limit and silently disable RAG
 
-Evidence:
+**FIXED.** The two limits were reconciled onto one shared constant.
 
-- `src/qubettera/discussion/retrieval_provider.py:20` allows 1,800 characters.
-- `src/qubettera/discussion/retrieval_provider.py:66-90` combines the objective,
-  topic, constraint, persona focus, previous opinion, and neighbor opinions.
-- `src/qubettera/rag/retrieve.py:100-101` rejects anything over 512 characters.
-- `src/qubettera/discussion/retrieval_provider.py:95-108` catches that
-  `ValueError` and returns no evidence, allowing the discussion to continue as
-  if retrieval merely found nothing.
+Evidence of the original defect (confirmed at runtime by the live demo, where
+every round-1+ turn logged `retrieval unavailable (query is too long; limit is
+512 characters)`):
 
-Impact: later rounds are particularly likely to cross 512 characters. Those
-turns receive no fresh RAG evidence even though their event is reported as a
-successful agent turn.
+- `src/qubettera/discussion/retrieval_provider.py` allowed 1,800 characters.
+- `src/qubettera/rag/retrieve.py` rejected anything over 512 characters (a
+  MiniLM-era limit; Qwen3-Embedding accepts 32,768 tokens).
+- The provider caught that `ValueError` and returned no evidence, allowing the
+  discussion to continue as if retrieval merely found nothing.
 
-Recommended change:
+What changed:
 
-- Make one shared query limit constant and enforce it while constructing the
-  query, not after construction.
-- Prefer objective + current topic + persona focus + extracted keywords from
-  neighbor claims. Do not concatenate long opinions verbatim.
-- Record retrieval status (`ok`, `empty`, `invalid_query`, `unavailable`) in
-  turn metadata and the event log.
-- Add a regression test using realistic maximum-length previous and neighbor
-  opinions, asserting that the final query is valid and retrieval is invoked.
+- `MAX_QUERY_CHARS` (default 2,000) now lives in
+  `src/qubettera/rag/settings.py` as the single source of truth.
+- `_validate_query` enforces it, and both the discussion provider and
+  `agents/pipelines/opinion.py` truncate to the same constant, so they cannot
+  drift again.
+- Regression tests: `test_query_limit_matches_the_discussion_provider_budget`
+  and `test_opinion_query_truncation_respects_the_shared_limit`.
 
 Acceptance criterion: every live discussion turn issues a query accepted by
-`_validate_query`, or explicitly records why it did not.
+`_validate_query`, or explicitly records why it did not. **Met** - verified
+with a worst-case composite query (1,681 characters) that previously failed.
+
+Still open: retrieval status (`ok`, `empty`, `invalid_query`, `unavailable`) is
+not yet recorded in turn metadata, so an outage is still only visible in logs.
 
 ### 2. Retrieval quality fallback checks a field that is never returned
+
+**FIXED in the discussion path; still open in the agent tool.**
 
 Evidence:
 
 - `src/qubettera/agents/tools/retrieval_tool.py:60-64` treats results as relevant
   whenever `distance` is absent.
-- `src/qubettera/rag/retrieve.py:212-290` returns `similarity`, `rrf_score`, and
+- `src/qubettera/rag/retrieve.py` returns `similarity`, `rrf_score`, and
   optionally `text_rank_score`; it does not return `distance`.
 
 Impact: every non-empty retrieval result is accepted, even when similarity is
 weak. The intended LLM query rewrite path will only activate for an empty
 result set, not for poor matches.
+
+What changed: `TeamRetrievalProvider._to_evidence` now reads the fields
+retrieval actually returns, preferring `rerank_score`, then `similarity`, then
+`score`. Previously every discussion evidence score was `None`; it now carries
+real values (verified live at 0.738-0.794). An existing test had encoded the
+bug by asserting `item.score is None`; it now asserts the correct score.
+
+The `retrieval_tool.py` relevance gate is unchanged: choosing a similarity
+threshold is a tuning decision, and `distance` (lower is better) is not
+comparable to `similarity` (higher is better), so the direction must be fixed
+deliberately rather than by assumption.
 
 Recommended change:
 
@@ -111,7 +133,38 @@ Recommended change:
 Acceptance criterion: tests demonstrate distinct behavior for high-quality,
 weak, and empty result sets using the actual production result shape.
 
-### 3. Several default paths still point to the wrong post-migration locations
+### 3. Retrieval model singletons are not thread-safe (live demo OOM)
+
+**FIXED.** This was the second blocker that prevented the live demo from running.
+
+Evidence (confirmed at runtime):
+
+- The orchestrator retrieves for all agents concurrently through a
+  `ThreadPoolExecutor` (`discussion/orchestrator.py:224-225`, sized by
+  `DISCUSSION_MAX_WORKERS`, default 5).
+- `_get_embed_model()` and `_get_reranker()` in `rag/retrieve.py` did an
+  unguarded check-then-act on module globals, so every worker saw a `None`
+  cache entry and loaded a full copy of the weights.
+- The failed run logged six concurrent `Loading weights: 0%...310` progress
+  bars followed by
+  `memory allocation failed with OOM on device 0`, after which all five
+  agents reported `retrieval unavailable` for round 0.
+
+What changed: both lazy singletons are now guarded by a `threading.Lock`
+(`_load_model`). The authoritative state is re-read inside the lock, because
+checking a pre-lock snapshot still lets every waiting thread load its own copy
+- the first version of this fix had exactly that bug and was caught by
+`test_concurrent_model_loaders_share_a_single_instance`, which asserts one
+builder invocation across eight racing threads.
+
+A single copy of the embedder plus reranker requires ~1.2 GiB; six concurrent
+copies exceeded the 6 GiB GPU.
+
+Related finding: the GPU is shared with the desktop session (~660 MiB), so
+concurrency limits and batch sizes must be validated on this machine rather
+than on a clean card.
+
+### 4. Several default paths still point to the wrong post-migration locations
 
 Confirmed at runtime:
 
@@ -148,7 +201,7 @@ Recommended change:
 Acceptance criterion: CLI commands and public APIs behave identically when the
 current directory is outside the repository.
 
-### 4. The default memory store is not safe enough for concurrent production use
+### 5. The default memory store is not safe enough for concurrent production use
 
 Evidence:
 
@@ -172,9 +225,118 @@ Recommended change:
 - Report corrupt lines with path and line number using the strict JSONL helper.
 - Add same-agent multi-instance and multi-thread tests.
 
+### 6. Tool-round budget and final-round framing were the same flag
+
+**FIXED.**
+
+Evidence (measured from a real three-round run,
+`outputs/discussions/7e2f331a-73e1-4821-bf46-34eea9f2a089.jsonl`):
+
+- The agent's `messages` list is checkpointed for the whole discussion
+  (`week2_adapter.py`, `thread_id = f"{discussion_id}:{agent_id}"` with a
+  `MemorySaver`), and round 0 deliberately calls tools via the
+  mandatory-retrieval path.
+- `call_model` therefore computed `synthesis_mode = tool_count >=
+  MAX_TOOL_ROUNDS` from a **lifetime-of-agent** count. After round 0 every
+  subsequent turn had `synthesis_mode = True` forever.
+- That single `synthesis_mode` flag was then used for two unrelated jobs: loop
+  control (refusing further tool calls) and semantic framing ("Synthesize ...
+  into your **final** comprehensive persona recommendation now").
+
+Measured consequences:
+
+- Tool-retrieved documents per turn: `20, 15, 13, 5, 15`, then **0 for all 15
+  discussion turns** - no round after the initial snapshot ever retrieved.
+- `Final Recommendation` headings by round: `r0: 2, r1: 6, r2: 8, r3: 8`. Six of
+  fifteen round-1 turns presented themselves as final.
+- Late-round stagnation: `systems_specialist` self-similarity r2→r3 `0.938`,
+  `hybrid_architect` `0.890`.
+
+What changed:
+
+- `AgentState` gained `tool_rounds_used`, `max_tool_rounds`, and `final_round`.
+- `tool_node` increments `tool_rounds_used`; the adapter resets it to `0` at the
+  start of every turn, so the budget is genuinely per turn.
+- `max_tool_rounds_per_turn()` replaces the inline `os.getenv` read and
+  validates the value.
+- `call_model` derives `tools_exhausted = tool_rounds_used >= per_turn_budget`
+  for loop control only, and passes `final_round` separately.
+- `TurnRequest.is_final_round` is computed by the orchestrator as
+  `round_number >= config.num_rounds`, so the agent graph never needs to know
+  the discussion's round structure.
+- `resources/prompts/system.jinja` now contains two **independent** blocks
+  rather than one three-way branch: block 1 is the tool policy (mandatory
+  retrieval while the per-turn budget is unspent, otherwise no tools), block 2
+  is the round framing (final synthesis on the final round, peer response with
+  "This is not the final round." otherwise). Keeping the two concerns orthogonal
+  means a fresh final round legitimately receives *both* the retrieval
+  instruction and the finality framing - the last round is exactly where fresh
+  evidence matters most.
+- The mandatory-retrieval backstop in `call_model` no longer requires
+  `retrieved_docs` to be empty. The discussion adapter pre-fills that list with
+  provider evidence on every turn, so the old guard silently disabled the
+  backstop for every round after the first - the second, independent reason
+  rounds 1-3 gathered no tool evidence. `tool_rounds_used == 0` alone now means
+  "this turn has not gathered tool evidence yet". The retry nudge is also
+  worded from `final_round`, so it no longer tells a mid-discussion turn to
+  produce a final recommendation.
+- The `final_round` state default is `True`, because callers that build their
+  own graph input (`agents/handoff.py`, `agents/pipelines/opinion.py`) are
+  single-shot runs for which the previous final-synthesis wording must not
+  change.
+
+Regression tests: `test_spent_tool_budget_on_a_non_final_round_does_not_claim_finality`,
+`test_final_round_keeps_the_final_synthesis_framing`,
+`test_fresh_turn_still_requires_retrieval_even_on_the_final_round`,
+`test_default_final_round_is_true_for_standalone_runs`,
+`test_tool_budget_is_reusable_on_a_fresh_turn`,
+`test_mid_discussion_turn_keeps_a_fresh_tool_budget_across_rounds`,
+`test_only_the_final_round_is_marked_final`,
+`test_mandatory_retrieval_backstop_fires_when_evidence_was_prefilled`.
+
+Related and still open:
+
+- P0 #2 - the `distance` relevance gate in `agents/tools/retrieval_tool.py` is
+  dead in production (0 of 188 evidence items carried a non-null `distance`), so
+  the LLM query-regeneration fallback never fires. Fixing it requires a
+  calibrated threshold on `similarity`/`rerank_score`, which is a tuning
+  decision rather than a correctness fix.
+- Evidence items from the discussion provider (cosine, ~0.6-0.8), the
+  `knowledge_retrieval` tool (RRF, ~0.01-0.03), and `live_web_search` (`None`)
+  arrive on three incompatible score scales. No consumer sorts by `score` today,
+  so the defect is latent.
+
+### 7. Ordinal citations had no referent in the evidence block
+
+**FIXED.**
+
+Evidence: `hybrid_architect` and `grad_student` cite by ordinal (`[1]`, `[[2]]`)
+while the other three personas cite full URLs. `render_evidence_block` emitted
+an unnumbered bulleted list, so a bracketed ordinal resolved to nothing - the
+numbers matched neither evidence position nor tool-call rank (for example
+`grad_student` round 0 cited `[[2]]` for "VRAM" while the only matching evidence
+sat at position 6). All 18 URL-style turns did resolve, so no URL was
+fabricated.
+
+What changed: `render_evidence_block` numbers items 1-based in tuple order, so
+`[n]` now resolves to `evidence[n-1]`. Regression test:
+`test_render_evidence_block_numbers_items_in_order`.
+
+### 8. The discussion evidence budget was fixed at five items
+
+**FIXED.**
+
+`DEFAULT_TOP_K = 5` was hard-coded, and `TeamRetrievalProvider()` was
+constructed with no arguments in both `cli.py` and `discussion/demo.py`, so the
+per-turn evidence depth could not be changed without editing source. The setting
+now reads `DISCUSSION_TOP_K` (default `5`) with validation, and the constructor
+still accepts an explicit `top_k` that takes precedence. Regression tests:
+`test_top_k_defaults_to_five_and_is_configurable`,
+`test_top_k_env_is_validated`, `test_configured_top_k_is_used_for_retrieval`.
+
 ## P1: high-value improvements
 
-### 5. `retrieve_batch` does not batch and every turn opens a new DB connection
+### 9. `retrieve_batch` does not batch and every turn opens a new DB connection
 
 `src/qubettera/rag/retrieve.py:402-418` loops through `retrieve` one query at a
 time. Each call encodes one query and opens a new PostgreSQL connection. A
@@ -191,31 +353,45 @@ Recommended change:
 - Measure p50/p95 per-stage latency before and after; do not rely only on total
   demo time.
 
-### 6. Retrieval quality needs another tuning cycle
+### 10. Retrieval quality needs another tuning cycle
 
-The stored complete baseline contains 15,162 chunks and 297 sources. At `k=5`:
+The stored complete baseline contains 13,834 chunks and 281 sources. At `k=5`:
 
 | Mode | Hit@5 | Precision@5 | MRR | nDCG@5 | Source recall | Mean latency |
 |---|---:|---:|---:|---:|---:|---:|
-| Hybrid | 0.6000 | 0.1400 | 0.3522 | 0.2808 | 0.3500 | 394.62 ms |
-| Hybrid + rerank | 0.4667 | 0.1200 | 0.2872 | 0.2386 | 0.3000 | 1982.06 ms |
+| Hybrid | 0.5333 | 0.1467 | 0.3917 | 0.3222 | 0.3667 | 351.36 ms |
+| Hybrid + rerank | 0.4000 | 0.0933 | 0.2417 | 0.1895 | 0.2333 | 409.89 ms |
 
-The reranker is about five times slower and lowers every reported quality
-metric, so keeping reranking disabled by default is correct.
+The reranker lowers every reported quality metric, so keeping reranking disabled
+by default is correct. The paired comparison now makes this statistically
+explicit: reranking gains a hit on 0 of 30 queries and loses hits on 4, and the
+bootstrap 95% intervals exclude zero for Hit@5, MRR, nDCG@5, precision, and
+recall. Retaining the current `ms-marco-MiniLM-L-6-v2` reranker is a real loss
+rather than noise; it would need to be replaced with a scientific-domain model
+to be worth enabling.
+
+Note that absolute Hit@5 understates retrieval quality here: the same queries at
+`top_k=50` find a judged paper for 29/30 queries at a median rank of 4. See
+`docs/rag/evaluation_code_review.md` for the full interpretation.
 
 Recommended experiments:
 
 - Inspect failures per query before changing algorithms.
 - Measure actual tokenizer truncation for 1,200-character chunks plus contextual
-  prefixes.
+  prefixes. The reranker truncates ~13% of candidate texts at its 512-token
+  limit, and only 40 candidates reach it.
 - Tune chunk size/overlap, RRF `k`, candidate pool, and source limits through a
   small grid search.
 - Compare PostgreSQL full-text configurations for technical terms, acronyms,
   model names, and hyphenated tokens.
-- Expand qrels beyond source-level matching to passage-level relevance.
+- Expand qrels beyond source-level matching to passage-level relevance, and
+  admit topically-equivalent recent papers so the metric measures answer
+  correctness rather than historical-citation matching.
+- Re-baseline against a fixed corpus snapshot so model changes are measurable
+  without the corpus-recency confound.
 - Add a minimum quality gate so regressions fail CI.
 
-### 7. `doctor` checks construction, not real service health
+### 11. `doctor` checks construction, not real service health
 
 `src/qubettera/cli.py:102-119` validates the index with a database query but only
 constructs the generation client. A dead, expired, or incompatible Kaggle
@@ -229,7 +405,7 @@ Recommended change:
 - Report dependency availability separately from endpoint availability.
 - Add `--offline` and `--json` modes for CI and automation.
 
-### 8. Live integration contracts are untested
+### 12. Live integration contracts are untested
 
 The unit tests mock the database, retrieval service, LLM, search providers, and
 crawler. There is no automated contract test for PostgreSQL/pgvector, the
@@ -246,7 +422,7 @@ Recommended test layers:
   configuration, fixed miniature corpus.
 - Nightly/full evaluation: enforce retrieval-quality and latency thresholds.
 
-### 9. Remote endpoint and crawler hardening
+### 13. Remote endpoint and crawler hardening
 
 - Kaggle/tunnel configuration has no explicit authentication-header mechanism.
   A public tunnel can expose model capacity and discussion content.
@@ -267,7 +443,7 @@ Recommended change:
 - Mark retrieved content as quoted untrusted data in prompts and instruct the
   model never to follow embedded instructions.
 
-### 10. Pin runtime and model identities for reproducibility
+### 14. Pin runtime and model identities for reproducibility
 
 `pyproject.toml` leaves many fast-moving dependencies unbounded, and model
 revision defaults are `main`. Docker uses the mutable `pgvector/pgvector:pg17`
@@ -284,7 +460,7 @@ Recommended change:
 
 ## P2: maintainability and product improvements
 
-### 11. Remove duplicate and legacy code paths
+### 15. Remove duplicate and legacy code paths
 
 There are overlapping implementations for web search, graph handling, prompt
 construction, and command execution. Thirty source/README files still contain
@@ -304,7 +480,7 @@ release if needed, and then delete it. This will reduce inconsistent behavior
 and make imports cheaper. In particular, `llm/factory.py` should import
 `AgentCallbackHandler` directly instead of importing the broad `utils` package.
 
-### 12. Fix smaller control-flow edge cases
+### 16. Fix smaller control-flow edge cases
 
 - `agents/agent/graph.py:166-171` references `task` before assigning it if the
   message list is empty. Assign `task` before the fallback branch.
@@ -321,7 +497,7 @@ and make imports cheaper. In particular, `llm/factory.py` should import
   configure the runtime. Either implement it or rename it to clarify that it
   only documents environment-variable names.
 
-### 13. Improve failure policy and observability
+### 17. Improve failure policy and observability
 
 Discussion retrieval failures currently log a warning and return no evidence.
 That availability choice is reasonable, but it conflicts with strict prompts
@@ -336,7 +512,7 @@ Recommended change:
 - Use structured logging with discussion and agent IDs.
 - Redact credentials, signed URLs, and sensitive prompt content where needed.
 
-### 14. Add a final team synthesis stage
+### 18. Add a final team synthesis stage
 
 The current result is an ordered transcript. It does not produce a final team
 decision that summarizes consensus, disagreements, evidence, risks, and the
@@ -353,7 +529,7 @@ Add a deterministic synthesis contract after the final round, ideally with:
 
 Validate citations against URLs actually present in the discussion evidence.
 
-### 15. Add engineering quality gates
+### 19. Add engineering quality gates
 
 Recommended tooling:
 
@@ -374,8 +550,14 @@ partial failures in concurrent discussion stages.
 ### Phase 1: correctness
 
 - Centralize every filesystem path.
-- Unify the 512-character query contract.
-- Repair score/relevance handling.
+- ~~Unify the 512-character query contract.~~ Done: one shared `MAX_QUERY_CHARS`.
+- Repair score/relevance handling. (Discussion path done; agent tool open.)
+- ~~Make the retrieval model singletons thread-safe.~~ Done: validated by the
+  live demo, which previously OOM'd on five concurrent model loads.
+- ~~Separate the tool-round budget from final-round framing.~~ Done: the budget
+  is per turn, only the last round is framed as final, ordinal citations resolve
+  against a numbered evidence block, and per-turn evidence depth is configurable
+  through `DISCUSSION_TOP_K`.
 - Fix memory concurrency/validation and small control-flow bugs.
 - Add regression tests for every fix.
 

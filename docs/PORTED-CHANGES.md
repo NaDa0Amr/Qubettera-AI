@@ -6,7 +6,7 @@
 |------|--------|
 | `src/qubettera/discussion/orchestrator.py` | **Updated** — thread-safe event writes + DiscussionExecutionError merge |
 | `src/qubettera/discussion/demo.py` | **Updated** — ConsoleTurnStream, --parallel, --no-agent-tools, persona names, timestamped output |
-| `src/qubettera/discussion/retrieval_provider.py` | **No changes needed** — Qubettera-AI uses local MiniLM, not Kaggle Ollama |
+| `src/qubettera/discussion/retrieval_provider.py` | **No changes needed** — Qubettera-AI uses local Qwen3 embeddings, not Kaggle Ollama |
 | `src/qubettera/rag/retrieve.py` | **No changes needed** — Qubettera-AI uses local SentenceTransformer embeddings |
 | `tests/discussion/test_demo.py` | **Created** — fake mode streaming tests |
 
@@ -48,7 +48,7 @@
 ### 3. `src/qubettera/discussion/retrieval_provider.py`
 
 **No changes needed.** Qubettera-AI's version already uses:
-- Local `MiniLM` / `SentenceTransformer` embeddings (not Kaggle Ollama)
+- Local `Qwen/Qwen3-Embedding-0.6B` / `SentenceTransformer` embeddings (not Kaggle Ollama)
 - `RetrievalService` wrapper around PostgreSQL pgvector
 - Graceful degradation on errors (returns `()` instead of crashing)
 - `_clip()` component truncation for query building
@@ -65,6 +65,13 @@ Two tests ported from the original `tests/week3/test_demo.py`:
 ---
 
 ## How to Run
+
+This module-level entry point still works and is exercised by
+`tests/discussion/test_demo.py`, but it is a legacy harness kept for the ported
+tests. Use `qubettera discuss run` for the supported command, documented under
+**Running the live demo** in the README. Note that this form defaults to
+`--output-dir outputs/discussions` with a timestamped filename, whereas the CLI
+names the log after the discussion id.
 
 ### From the Qubettera-AI project root:
 
@@ -96,7 +103,7 @@ outputs/discussions/demo-fake-json-5agents-<timestamp>.jsonl
 
 | Aspect | Transformer-Architecture-Debate-Framework | Qubettera-AI |
 |--------|-------------------------------------------|--------------|
-| Embedding model | `qwen3-embedding:8b` on Kaggle Ollama (remote GPU) | `MiniLM` via `SentenceTransformer` (local CPU/GPU) |
+| Embedding model | `qwen3-embedding:8b` on Kaggle Ollama (remote GPU) | `Qwen/Qwen3-Embedding-0.6B` via `SentenceTransformer` (local CPU/GPU, 1024-dim) |
 | Connection | ngrok tunnel → Kaggle notebook | Direct PostgreSQL connection |
 | Concurrency guard | `Semaphore(2)` + retry + backoff | Not needed (local embedding is fast) |
 | Failure mode | Returns `()` if Kaggle is unreachable | Returns `()` on DB errors |

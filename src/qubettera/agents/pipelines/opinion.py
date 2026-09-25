@@ -15,6 +15,7 @@ from qubettera.agents.llm.factory import get_chat_model
 from qubettera.agents.personas.loader import PROJECT_ROOT, PersonaConfig, load_persona
 from qubettera.agents.tools.retrieval_tool import knowledge_retrieval
 from qubettera.paths import PROMPTS_DIR
+from qubettera.rag.settings import MAX_QUERY_CHARS
 
 retrieve_knowledge_base = knowledge_retrieval
 RetrievedDocument = dict[str, Any]
@@ -29,7 +30,7 @@ def build_retrieval_query(persona: PersonaConfig, topic: str) -> str:
     if not topic:
         raise ValueError("topic must not be blank")
     query = f"{topic} Evidence focus: {persona['retrieval_focus']}"
-    return query[:512]
+    return query[:MAX_QUERY_CHARS]
 
 
 def _parse_documents(tool_output: str) -> list[RetrievedDocument]:

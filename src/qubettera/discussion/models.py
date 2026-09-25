@@ -112,6 +112,7 @@ class TurnRequest:
     previous_opinion: str = ""
     retrieval_query: str = ""
     evidence: tuple[EvidenceItem, ...] = ()
+    is_final_round: bool = False
 
     @property
     def neighbor_opinions(self) -> dict[str, str]:

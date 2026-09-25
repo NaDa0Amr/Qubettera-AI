@@ -46,9 +46,12 @@ def render_messages_block(messages: tuple[RoutedMessage, ...]) -> str:
 def render_evidence_block(evidence: tuple[EvidenceItem, ...]) -> str:
     if not evidence:
         return "- No externally supplied evidence for this turn. You may use your available tools."
+    # Numbered 1-based in tuple order so an agent citing "[n]" resolves to
+    # evidence[n-1]; the list was previously unnumbered, which left ordinal
+    # citations with no referent.
     return "\n".join(
-        f"- {item.title or 'Untitled source'} | {item.url or 'no URL'}\n  {item.text}"
-        for item in evidence
+        f"[{index}] {item.title or 'Untitled source'} | {item.url or 'no URL'}\n  {item.text}"
+        for index, item in enumerate(evidence, start=1)
     )
 
 

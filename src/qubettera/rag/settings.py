@@ -38,6 +38,11 @@ RERANKER_MODEL = os.environ.get(
 )
 RERANKER_MODEL_REVISION = os.environ.get("RERANKER_MODEL_REVISION", "main")
 
+# Upper bound for a single retrieval query. Qwen3-Embedding accepts 32,768
+# tokens, so this is a sanity guard rather than a model limit, and it must stay
+# above the composite queries built by the discussion provider.
+MAX_QUERY_CHARS = _positive_int_env("MAX_QUERY_CHARS", 2000)
+
 
 def get_embedding_device() -> str:
     """Select CUDA when available while retaining a usable CPU fallback."""

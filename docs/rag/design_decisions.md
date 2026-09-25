@@ -40,7 +40,9 @@ Chunks carry URL/title provenance, heading metadata, document/chunk indexes, col
 
 ## 4. Embeddings and cache identity
 
-The default model is `Qwen/Qwen3-Embedding-0.6B` with 1024 dimensions. Query embeddings use the model's built-in `query` retrieval prompt while document embeddings remain unprompted. Model name, requested revision, dimensionality, pipeline version, and preprocessing version are configured centrally in `qubettera.rag.settings`.
+The model is `Qwen/Qwen3-Embedding-0.6B` with 1024 dimensions. Query embeddings use the model's built-in `query` retrieval prompt while document embeddings remain unprompted. Model name, requested revision, dimensionality, batch size, device, pipeline version, and preprocessing version are configured centrally in `qubettera.rag.settings`.
+
+Device selection resolves through `settings.get_embedding_device()` and is applied by every model loader: the embedding stage, the retrieval embedder, and the cross-encoder reranker. `EMBEDDING_DEVICE=auto` selects CUDA when the active torch build reports it is available and falls back to CPU otherwise; `cuda` and `cpu` force the device and an unsatisfiable `cuda` request fails loudly instead of silently running on CPU. A larger `EMBEDDING_BATCH_SIZE` increases throughput and VRAM use together, so it is the first value to lower when embedding runs out of memory.
 
 The embedding artifact is resumable, but a cache row is reusable only when all of these agree:
 
@@ -84,7 +86,22 @@ Vector embedding and cross-encoder reranking use deterministic contextual text c
 
 Candidate selection allows at most two chunks per normalized source before reranking, and final output allows one. Normalization collapses arXiv versions and trailing slashes. This avoids one long paper consuming the entire top-k and makes source-level evaluation well defined.
 
-Hybrid-only retrieval is the runtime default because the completed 30-query evaluation currently scores higher than the reranked mode (Hit@5 `0.6000` versus `0.4667`). Reranking remains available explicitly for experiments and is always measured during evaluation.
+Hybrid-only retrieval is the runtime default, and the 30-query evaluation supports that choice: the reranked mode scores lower on every quality metric, with paired bootstrap intervals that exclude zero.
+
+| Metric | Hybrid | With reranker | Delta (95% paired CI) |
+|---|---|---|---|
+| Hit@5 | 0.5333 | 0.4000 | −0.1333 [−0.2667, −0.0333] |
+| MRR | 0.3917 | 0.2417 | −0.1500 (CI below zero) |
+| nDCG@5 | 0.3222 | 0.1895 | −0.1327 (CI below zero) |
+| Precision@5 | 0.1467 | 0.0933 | −0.0534 (CI below zero) |
+| Source recall | 0.3667 | 0.2333 | −0.1334 (CI below zero) |
+| Latency | 351 ms | 410 ms | CI includes zero |
+
+Per-query, the reranker gains a hit on no query and loses on four. The reranker retains a 512-token input limit and only sees `max(top_k * 6, 40)` candidates. It remains available for experiments through `retrieve(..., rerank=True)` and `qubettera rag retrieve --rerank`, but it is not on by default.
+
+`rerank` is also an argument of the `knowledge_retrieval` and `retrieve_knowledge_base` LangChain tools, so it is visible in the JSON schema the generation model sees. The default is pinned to `False` by `test_llm_visible_retrieval_tools_default_rerank_to_false`, and no shipped source path enables it (`test_reranker_is_never_enabled_from_live_code_paths`), so an agent cannot turn it on unless both a default change and that guard are deliberately altered.
+
+No stored discussion run has ever enabled the reranker: across all `knowledge_retrieval` evidence in `outputs/discussions/`, scores span `0.007`–`0.063`, the RRF fused-rank scale, never MiniLM cross-encoder logits.
 
 ## 7. Evaluation
 
