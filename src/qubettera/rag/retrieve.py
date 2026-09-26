@@ -2,10 +2,12 @@
 
 import argparse
 import json
+import logging
 import math
 import re
 import sys
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlsplit
 
 import psycopg2
@@ -21,8 +23,7 @@ if __package__ in {None, ""}:
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
-        RERANKER_MODEL,
-        RERANKER_MODEL_REVISION,
+        ADAPTIVE_EXPANSION_MIN_SIMILARITY,
     )
 else:
     from .database import connect as connect_database
@@ -34,8 +35,7 @@ else:
         IVFFLAT_PROBES as CONFIGURED_IVFFLAT_PROBES,
         PIPELINE_VERSION,
         PREPROCESSING_VERSION,
-        RERANKER_MODEL,
-        RERANKER_MODEL_REVISION,
+        ADAPTIVE_EXPANSION_MIN_SIMILARITY,
     )
 
 def get_db_config() -> dict:
@@ -44,13 +44,17 @@ def get_db_config() -> dict:
 
 RRF_K = 30
 CANDIDATE_POOL = 150
+EXPANSION_COUNT = 3
+EXPANSION_WEIGHT = 0.7
 # Storage caps IVFFlat at 100 lists. Probing every list makes evaluation and
 # local retrieval stable across index rebuilds at the current corpus scale.
 IVFFLAT_PROBES = CONFIGURED_IVFFLAT_PROBES
-RERANK_SOURCE_LIMIT = 2
+SOURCE_CANDIDATE_LIMIT = 2
 FINAL_SOURCE_LIMIT = 1
 _embed_model = None
-_reranker_model = None
+logger = logging.getLogger(__name__)
+
+QueryExpander = Callable[[str, int], list[str]]
 
 
 def get_connection():
@@ -72,23 +76,6 @@ def _get_embed_model():
                 EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION
             )
     return _embed_model
-
-
-def _get_reranker():
-    global _reranker_model
-    if _reranker_model is None:
-        from sentence_transformers import CrossEncoder
-        try:
-            _reranker_model = CrossEncoder(
-                RERANKER_MODEL,
-                revision=RERANKER_MODEL_REVISION,
-                local_files_only=True,
-            )
-        except (OSError, ValueError):
-            _reranker_model = CrossEncoder(
-                RERANKER_MODEL, revision=RERANKER_MODEL_REVISION
-            )
-    return _reranker_model
 
 
 def _encode_query(model, query: str):
@@ -273,18 +260,39 @@ def _keyword_search(cur, query: str, top_k: int) -> list[dict]:
 
 
 def _rrf_fuse(vector_results, keyword_results, k=RRF_K):
+    return _weighted_rrf_fuse(
+        [
+            (vector_results, 1.0, "vector"),
+            (keyword_results, 1.0, "keyword"),
+        ],
+        k=k,
+    )
+
+
+def _weighted_rrf_fuse(ranked_lists, k=RRF_K):
+    """Fuse any number of ranked lists, optionally down-weighting expansions."""
     scores = {}
     chunk_data = {}
+    matched_queries: dict[str, list[str]] = {}
 
-    for rank, r in enumerate(vector_results):
-        cid = r["chunk_id"]
-        scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-        chunk_data.setdefault(cid, {}).update(r)
-
-    for rank, r in enumerate(keyword_results):
-        cid = r["chunk_id"]
-        scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-        chunk_data.setdefault(cid, {}).update(r)
+    for ranked_results, weight, query_label in ranked_lists:
+        seen_in_list = set()
+        for rank, result in enumerate(ranked_results):
+            cid = result["chunk_id"]
+            if cid in seen_in_list:
+                continue
+            seen_in_list.add(cid)
+            scores[cid] = scores.get(cid, 0.0) + weight / (k + rank + 1)
+            stored = chunk_data.setdefault(cid, {})
+            for key, value in result.items():
+                if value is not None:
+                    if key in {"similarity", "text_rank_score"} and stored.get(key) is not None:
+                        stored[key] = max(float(stored[key]), float(value))
+                    else:
+                        stored[key] = value
+            labels = matched_queries.setdefault(cid, [])
+            if query_label not in labels:
+                labels.append(query_label)
 
     results = []
     for cid, score in sorted(scores.items(), key=lambda x: -x[1]):
@@ -299,8 +307,58 @@ def _rrf_fuse(vector_results, keyword_results, k=RRF_K):
             "rrf_score": score,
             "similarity": data.get("similarity"),   # None if missing
             "text_rank_score": data.get("text_rank_score"),
+            "matched_queries": matched_queries.get(cid, []),
         })
     return results
+
+
+def _query_variants(
+    query: str,
+    *,
+    expand: bool,
+    expansion_count: int,
+    query_expander: QueryExpander | None,
+) -> list[str]:
+    if not expand:
+        return [query]
+    if not isinstance(expansion_count, int) or isinstance(expansion_count, bool):
+        raise TypeError("expansion_count must be an integer")
+    if not 1 <= expansion_count <= 5:
+        raise ValueError("expansion_count must be between 1 and 5")
+
+    if query_expander is None:
+        if __package__ in {None, ""}:
+            from qubettera.rag.query_expansion import expand_query_with_llm
+        else:
+            from .query_expansion import expand_query_with_llm
+        query_expander = expand_query_with_llm
+
+    try:
+        candidates = query_expander(query, expansion_count)
+    except Exception as exc:
+        logger.warning("Query expansion failed; using the original query: %s", exc)
+        return [query]
+    if not isinstance(candidates, list):
+        logger.warning("Query expansion returned a non-list; using the original query")
+        return [query]
+
+    variants = [query]
+    seen = {query.casefold()}
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        try:
+            candidate = _validate_query(candidate)
+        except (TypeError, ValueError):
+            continue
+        identity = candidate.casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        variants.append(candidate)
+        if len(variants) > expansion_count:
+            break
+    return variants
 
 
 def _source_key(result: dict) -> str:
@@ -330,27 +388,81 @@ def _limit_per_source(results: list[dict], limit: int) -> list[dict]:
     return selected
 
 
+def _retrieval_is_weak(
+    results: list[dict],
+    min_similarity: float = ADAPTIVE_EXPANSION_MIN_SIMILARITY,
+) -> bool:
+    """Use the strongest dense match to gate the expensive LLM expansion pass."""
+    if not results:
+        return True
+    similarities = [
+        float(result["similarity"])
+        for result in results[:5]
+        if result.get("similarity") is not None
+    ]
+    return bool(similarities) and max(similarities) < min_similarity
+
+
 def _retrieve_once(
     query: str,
     top_k: int = 20,
-    rerank: bool = False,
     candidate_pool: int = CANDIDATE_POOL,
+    expand: bool = False,
+    expansion_count: int = EXPANSION_COUNT,
+    query_expander: QueryExpander | None = None,
+    adaptive_expand: bool = False,
 ) -> list[dict]:
     query = _validate_query(query)
     top_k, candidate_pool = _validate_top_k(top_k, candidate_pool)
+    if adaptive_expand and not expand:
+        initial = _retrieve_once(
+            query,
+            top_k=top_k,
+            candidate_pool=candidate_pool,
+            expand=False,
+            expansion_count=expansion_count,
+            query_expander=query_expander,
+            adaptive_expand=False,
+        )
+        if not _retrieval_is_weak(initial):
+            for result in initial:
+                result["query_expansion_used"] = False
+            return initial
+        expanded = _retrieve_once(
+            query,
+            top_k=top_k,
+            candidate_pool=candidate_pool,
+            expand=True,
+            expansion_count=expansion_count,
+            query_expander=query_expander,
+            adaptive_expand=False,
+        )
+        chosen = expanded or initial
+        for result in chosen:
+            result["query_expansion_used"] = bool(expanded)
+        return chosen
+    variants = _query_variants(
+        query,
+        expand=expand,
+        expansion_count=expansion_count,
+        query_expander=query_expander,
+    )
 
     try:
         model = _get_embed_model()
-        query_vec = _encode_query(model, query)
-        if hasattr(query_vec, "tolist"):
-            query_vec = query_vec.tolist()
-        if not isinstance(query_vec, list) or len(query_vec) != EMBEDDING_DIM:
-            raise ValueError(
-                f"Query embedding dimension mismatch: expected {EMBEDDING_DIM}, "
-                f"got {len(query_vec) if isinstance(query_vec, list) else 'non-list'}"
-            )
-        if not all(math.isfinite(float(value)) for value in query_vec):
-            raise ValueError("Query embedding contains NaN or infinity")
+        query_vectors = []
+        for variant in variants:
+            query_vec = _encode_query(model, variant)
+            if hasattr(query_vec, "tolist"):
+                query_vec = query_vec.tolist()
+            if not isinstance(query_vec, list) or len(query_vec) != EMBEDDING_DIM:
+                raise ValueError(
+                    f"Query embedding dimension mismatch: expected {EMBEDDING_DIM}, "
+                    f"got {len(query_vec) if isinstance(query_vec, list) else 'non-list'}"
+                )
+            if not all(math.isfinite(float(value)) for value in query_vec):
+                raise ValueError("Query embedding contains NaN or infinity")
+            query_vectors.append(query_vec)
     except Exception as exc:
         raise RuntimeError(f"Embedding model failed for query: {query}") from exc
 
@@ -360,30 +472,23 @@ def _retrieve_once(
                 manifest = _read_index_manifest(cur, include_urls=False)
                 _validate_index_identity(manifest)
                 cur.execute("SELECT set_config('ivfflat.probes', %s, true)", (str(IVFFLAT_PROBES),))
-                vector_results = _vector_search(cur, query_vec, candidate_pool)
-                keyword_results = _keyword_search(cur, query, candidate_pool)
+                ranked_lists = []
+                for index, (variant, query_vec) in enumerate(zip(variants, query_vectors)):
+                    weight = 1.0 if index == 0 else EXPANSION_WEIGHT
+                    ranked_lists.extend(
+                        (
+                            (_vector_search(cur, query_vec, candidate_pool), weight, variant),
+                            (_keyword_search(cur, variant, candidate_pool), weight, variant),
+                        )
+                    )
     except psycopg2.Error as exc:
         raise RuntimeError("Database query failed during retrieval.") from exc
 
-    fused = _rrf_fuse(vector_results, keyword_results)
-    rerank_pool = _limit_per_source(fused, limit=RERANK_SOURCE_LIMIT)[: max(top_k * 6, 40)]
-
-    if rerank and len(rerank_pool) > 0:
-        try:
-            reranker = _get_reranker()
-            pairs = [(query, r["embedding_text"]) for r in rerank_pool]
-            scores = reranker.predict(pairs)
-            if len(scores) != len(rerank_pool):
-                raise ValueError(
-                    "Reranker returned a different number of scores than candidates"
-                )
-            for r, score in zip(rerank_pool, scores):
-                r["rerank_score"] = float(score)
-            rerank_pool.sort(key=lambda r: -r["rerank_score"])
-        except Exception as exc:
-            raise RuntimeError("Cross-encoder reranking failed.") from exc
-
-    final = _limit_per_source(rerank_pool, limit=FINAL_SOURCE_LIMIT)[:top_k]
+    fused = _weighted_rrf_fuse(ranked_lists)
+    selection_pool = _limit_per_source(
+        fused, limit=SOURCE_CANDIDATE_LIMIT
+    )[: max(top_k * 6, 40)]
+    final = _limit_per_source(selection_pool, limit=FINAL_SOURCE_LIMIT)[:top_k]
     for i, r in enumerate(final):
         r["rank"] = i + 1
     return final
@@ -392,39 +497,58 @@ def _retrieve_once(
 class RetrievalService:
     """Reusable public boundary for Qwen3 + PostgreSQL hybrid retrieval.
 
-    The underlying embedding and reranker models are process-level lazy
-    singletons, so constructing a service is cheap and repeated discussion
-    turns do not reload model weights.
+    The embedding model is a process-level lazy singleton, so constructing a
+    service is cheap and repeated discussion turns do not reload model weights.
     """
+
+    def __init__(
+        self,
+        query_expander: QueryExpander | None = None,
+        *,
+        adaptive_expand: bool = False,
+    ):
+        self._query_expander = query_expander
+        self._adaptive_expand = adaptive_expand
 
     def retrieve(
         self,
         query: str,
         top_k: int = 20,
-        rerank: bool = False,
         candidate_pool: int = CANDIDATE_POOL,
+        expand: bool = False,
+        expansion_count: int = EXPANSION_COUNT,
+        adaptive_expand: bool | None = None,
     ) -> list[dict]:
         return _retrieve_once(
             query,
             top_k=top_k,
-            rerank=rerank,
             candidate_pool=candidate_pool,
+            expand=expand,
+            expansion_count=expansion_count,
+            query_expander=self._query_expander,
+            adaptive_expand=(
+                self._adaptive_expand if adaptive_expand is None else adaptive_expand
+            ),
         )
 
     def retrieve_batch(
         self,
         queries: list[str],
         top_k: int = 20,
-        rerank: bool = False,
         candidate_pool: int = CANDIDATE_POOL,
+        expand: bool = False,
+        expansion_count: int = EXPANSION_COUNT,
+        adaptive_expand: bool | None = None,
     ) -> list[list[dict]]:
         """Retrieve several independent queries through one reusable service."""
         return [
             self.retrieve(
                 query,
                 top_k=top_k,
-                rerank=rerank,
                 candidate_pool=candidate_pool,
+                expand=expand,
+                expansion_count=expansion_count,
+                adaptive_expand=adaptive_expand,
             )
             for query in queries
         ]
@@ -436,15 +560,19 @@ _DEFAULT_RETRIEVAL_SERVICE = RetrievalService()
 def retrieve(
     query: str,
     top_k: int = 20,
-    rerank: bool = False,
     candidate_pool: int = CANDIDATE_POOL,
+    expand: bool = False,
+    expansion_count: int = EXPANSION_COUNT,
+    adaptive_expand: bool = False,
 ) -> list[dict]:
     """Retrieve evidence using the shared process-level retrieval service."""
     return _DEFAULT_RETRIEVAL_SERVICE.retrieve(
         query,
         top_k=top_k,
-        rerank=rerank,
         candidate_pool=candidate_pool,
+        expand=expand,
+        expansion_count=expansion_count,
+        adaptive_expand=adaptive_expand,
     )
 
 
@@ -460,8 +588,6 @@ def format_results(results: list[dict]) -> str:
         if r.get("text_rank_score") is not None:
             lines.append(f"  Text rank:  {r['text_rank_score']:.4f}")
         lines.append(f"  RRF score:  {r.get('rrf_score', 0):.6f}")
-        if r.get("rerank_score") is not None:
-            lines.append(f"  Rerank:     {r['rerank_score']:.4f}")
         lines.append(f"  Text:       {r['text'][:300]}...")
         lines.append("")
     return "\n".join(lines)
@@ -477,18 +603,21 @@ def main():
     parser = argparse.ArgumentParser(description="Retrieve relevant chunks from the knowledge base.")
     parser.add_argument("query", help="Natural-language query")
     parser.add_argument("--top-k", type=int, default=20, help="Number of results (default: 20)")
-    rerank_group = parser.add_mutually_exclusive_group()
-    rerank_group.add_argument(
-        "--rerank",
-        action="store_true",
-        help="Enable cross-encoder reranking (hybrid-only is the evaluated default)",
-    )
-    rerank_group.add_argument("--no-rerank", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Output raw JSON instead of formatted text")
+    parser.add_argument(
+        "--adaptive-expand",
+        action="store_true",
+        help="Expand only when the first-pass dense similarity is weak",
+    )
+    parser.add_argument("--expansions", type=int, default=EXPANSION_COUNT, help="Number of query variants (default: 3)")
     args = parser.parse_args()
 
-    rerank_enabled = args.rerank and not args.no_rerank
-    results = retrieve(args.query, top_k=args.top_k, rerank=rerank_enabled)
+    results = retrieve(
+        args.query,
+        top_k=args.top_k,
+        expansion_count=args.expansions,
+        adaptive_expand=args.adaptive_expand,
+    )
 
     if args.json:
         for r in results:
@@ -500,7 +629,7 @@ def main():
             (
                 f"\nQuery: {args.query}",
                 f"Strategy: Hybrid (vector + PostgreSQL text rank) "
-                f"{'+ reranker' if rerank_enabled else '(no rerank)'}",
+                f"{'+ adaptive query expansion' if args.adaptive_expand else ''}",
                 f"Results: {len(results)}\n",
                 format_results(results),
             )

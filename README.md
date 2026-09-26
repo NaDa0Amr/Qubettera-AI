@@ -23,20 +23,44 @@ qubettera doctor
 
 Set `KAGGLE_LLM_URL` and `KAGGLE_LLM_MODEL` in `.env` to match the notebook.
 `Qwen/Qwen3-Embedding-0.6B` is used for embeddings and retrieval; Kaggle
-generates answers. The optional reranking stage still uses a small MiniLM
-cross-encoder and is disabled by default. If embedding runs out of memory,
-lower `EMBEDDING_BATCH_SIZE` from its default of `8`.
+generates answers. Retrieval uses vector and PostgreSQL keyword search fused
+with reciprocal-rank fusion. If embedding runs out of memory, lower
+`EMBEDDING_BATCH_SIZE` from its default of `8`.
+
+Query expansion can use a separate local Ollama model. Set
+`QUERY_EXPANSION_PROVIDER=ollama`, `QUERY_EXPANSION_MODEL=qwen3:4b`, and
+`QUERY_EXPANSION_BASE_URL=http://localhost:11434` without changing the main
+generation provider.
 
 ## Commands
 
 ```powershell
 qubettera rag pipeline --skip-collection
 qubettera rag retrieve "mixture of experts routing" --top-k 5
+qubettera rag retrieve "mixture of experts routing" --adaptive-expand
 qubettera rag evaluate
+qubettera rag evaluate --mode hybrid
+qubettera rag evaluate --mode adaptive
 qubettera agent opinion dr_aris "Dense versus sparse transformer layers"
 qubettera discuss run --mode fake
 qubettera discuss run --mode live
 ```
+
+`--adaptive-expand` first runs normal hybrid retrieval and invokes the query
+`ADAPTIVE_EXPANSION_MIN_SIMILARITY` (default `0.55`). Set
+`DISCUSSION_ADAPTIVE_EXPANSION=true` to use it during live discussions; plain
+hybrid retrieval remains the default.
+
+Evaluation modes can be run independently. They are saved as
+`data/eval_results_hybrid.json` and `data/eval_results_adaptive.json`, so an
+expansion-model failure does not discard the completed hybrid result.
+
+Set `PAPER_FILTER_LLM_ENABLED=true` to let an LLM review only papers that the
+deterministic cleaner is about to drop. Decisions are persisted in
+`data/paper_relevance_cache.json`, keyed by paper content, so unchanged papers
+are not sent to the LLM again on later pipeline runs. For a local Ollama
+reviewer, set `PAPER_FILTER_LLM_BASE_URL=http://localhost:11434`; this is
+independent from the main generation model's endpoint.
 
 Generated corpus files live in `data/`; opinions and discussions live in
 `outputs/`. Architecture notes and the former coursework documentation are in

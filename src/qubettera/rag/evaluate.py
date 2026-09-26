@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import random
 import re
 import subprocess
 import sys
@@ -186,34 +185,10 @@ def _aggregate(query_rows: list[dict], mode: str) -> dict:
     return aggregate
 
 
-def _paired_bootstrap_interval(
-    query_rows: list[dict], metric: str, samples: int = 2000, seed: int = 20260901
-) -> list[float]:
-    """Deterministic percentile interval for the paired reranker-minus-base mean."""
-    if not query_rows:
-        return []
-    if samples <= 0:
-        raise ValueError("samples must be > 0")
-    deltas = [
-        row["modes"]["hybrid_rerank"]["metrics"].get(metric, row["modes"]["hybrid_rerank"].get(metric))
-        - row["modes"]["hybrid"]["metrics"].get(metric, row["modes"]["hybrid"].get(metric))
-        for row in query_rows
-    ]
-    generator = random.Random(seed)
-    size = len(deltas)
-    means = sorted(
-        sum(deltas[generator.randrange(size)] for _ in range(size)) / size
-        for _ in range(samples)
-    )
-    lower = means[int(0.025 * (samples - 1))]
-    upper = means[int(0.975 * (samples - 1))]
-    return [round(lower, 4), round(upper, 4)]
-
-
 def _auditable_results(results: list[dict], expected: dict) -> list[dict]:
     fields = (
         "rank", "chunk_id", "url", "title", "headers", "text", "similarity",
-        "text_rank_score", "rrf_score", "rerank_score",
+        "text_rank_score", "rrf_score", "query_expansion_used",
     )
     return [
         {**{field: result.get(field) for field in fields}, "relevant": _result_matches(result, expected)}
@@ -239,25 +214,32 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
-def run_evaluation(k: int = 5, allow_incomplete_corpus: bool = True) -> dict:
+def run_evaluation(
+    k: int = 5,
+    allow_incomplete_corpus: bool = True,
+    mode: str = "all",
+) -> dict:
     if not isinstance(k, int) or isinstance(k, bool):
         raise TypeError("k must be an integer")
     if not 1 <= k <= 50:
         raise ValueError("k must be between 1 and 50")
+    valid_modes = {"all", "hybrid", "adaptive"}
+    if mode not in valid_modes:
+        raise ValueError(f"mode must be one of {sorted(valid_modes)}, got {mode!r}")
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from qubettera.rag.retrieve import (
         CANDIDATE_POOL,
+        ADAPTIVE_EXPANSION_MIN_SIMILARITY,
+        EXPANSION_COUNT,
+        EXPANSION_WEIGHT,
         FINAL_SOURCE_LIMIT,
         IVFFLAT_PROBES,
-        RERANK_SOURCE_LIMIT,
+        SOURCE_CANDIDATE_LIMIT,
         RRF_K,
         get_index_manifest,
         retrieve,
     )
-    from qubettera.rag.settings import (
-        EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION, RERANKER_MODEL,
-        RERANKER_MODEL_REVISION,
-    )
+    from qubettera.rag.settings import EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION
 
     index_manifest = get_index_manifest()
     source_urls = index_manifest.pop("source_urls")
@@ -279,14 +261,31 @@ def run_evaluation(k: int = 5, allow_incomplete_corpus: bool = True) -> dict:
 
     coverage_by_query = {item["query_id"]: item for item in coverage["queries"]}
     per_query = []
-    modes = (("hybrid", False), ("hybrid_rerank", True))
+    all_modes = (
+        ("hybrid", False, False),
+        ("hybrid_adaptive_expansion", False, True),
+    )
+    mode_names = {
+        "hybrid": "hybrid",
+        "adaptive": "hybrid_adaptive_expansion",
+    }
+    modes = (
+        all_modes
+        if mode == "all"
+        else tuple(item for item in all_modes if item[0] == mode_names[mode])
+    )
     for judgment in EVAL_JUDGMENTS:
         mode_results = {}
-        for mode, use_reranker in modes:
+        for mode_name, use_expansion, use_adaptive_expansion in modes:
             started = time.perf_counter()
-            results = retrieve(judgment["query"], top_k=k, rerank=use_reranker)
+            results = retrieve(
+                judgment["query"],
+                top_k=k,
+                expand=use_expansion,
+                adaptive_expand=use_adaptive_expansion,
+            )
             latency_ms = (time.perf_counter() - started) * 1000
-            mode_results[mode] = {
+            mode_results[mode_name] = {
                 "metrics": compute_metrics(results, judgment, k=k),
                 "latency_ms": round(latency_ms, 2),
                 "results": _auditable_results(results, judgment),
@@ -302,53 +301,51 @@ def run_evaluation(k: int = 5, allow_incomplete_corpus: bool = True) -> dict:
         )
 
     fully_covered = [row for row in per_query if row["corpus_coverage"]["fully_covered"]]
-    aggregate = {mode: _aggregate(per_query, mode) for mode, _ in modes}
-    covered_aggregate = {mode: _aggregate(fully_covered, mode) for mode, _ in modes}
+    aggregate = {
+        mode_name: _aggregate(per_query, mode_name)
+        for mode_name, _, _ in modes
+    }
+    covered_aggregate = {
+        mode_name: _aggregate(fully_covered, mode_name)
+        for mode_name, _, _ in modes
+    }
     comparison_metrics = (
         "avg_hit_at_k", "avg_precision_at_k", "avg_mrr", "avg_ndcg_at_k",
         "avg_source_recall", "avg_latency_ms",
     )
-    comparison = {
-        name: round(aggregate["hybrid_rerank"][name] - aggregate["hybrid"][name], 4)
-        for name in comparison_metrics
-    }
-    raw_metric_for_aggregate = {
-        "avg_hit_at_k": "hit_at_k",
-        "avg_precision_at_k": "precision_at_k",
-        "avg_mrr": "mrr",
-        "avg_ndcg_at_k": "ndcg_at_k",
-        "avg_source_recall": "source_recall",
-        "avg_latency_ms": "latency_ms",
-    }
-    comparison_with_intervals = {
-        name: {
-            "mean_delta": comparison[name],
-            "paired_bootstrap_95_ci": _paired_bootstrap_interval(
-                per_query, raw_metric_for_aggregate[name], seed=20260901 + index
-            ),
+    adaptive_expansion_comparison = (
+        {
+            name: round(
+                aggregate["hybrid_adaptive_expansion"][name]
+                - aggregate["hybrid"][name],
+                4,
+            )
+            for name in comparison_metrics
         }
-        for index, name in enumerate(comparison_metrics)
-    }
-
+        if {"hybrid", "hybrid_adaptive_expansion"} <= aggregate.keys()
+        else {}
+    )
     result = {
         "run": {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "git_revision": _git_revision(),
             "qrels_version": QRELS_VERSION,
             "k": k,
+            "mode": mode,
             "allow_incomplete_corpus": allow_incomplete_corpus,
             "evaluation_status": (
                 "complete" if corpus_complete else "diagnostic_incomplete_corpus"
             ),
             "embedding_model": EMBEDDING_MODEL,
             "embedding_model_revision": EMBEDDING_MODEL_REVISION,
-            "reranker_model": RERANKER_MODEL,
-            "reranker_model_revision": RERANKER_MODEL_REVISION,
             "retrieval": {
                 "candidate_pool": CANDIDATE_POOL,
+                "expansion_count": EXPANSION_COUNT,
+                "expansion_weight": EXPANSION_WEIGHT,
+                "adaptive_expansion_min_similarity": ADAPTIVE_EXPANSION_MIN_SIMILARITY,
                 "rrf_k": RRF_K,
                 "ivfflat_probes": IVFFLAT_PROBES,
-                "rerank_source_limit": RERANK_SOURCE_LIMIT,
+                "source_candidate_limit": SOURCE_CANDIDATE_LIMIT,
                 "final_source_limit": FINAL_SOURCE_LIMIT,
             },
         },
@@ -359,18 +356,34 @@ def run_evaluation(k: int = 5, allow_incomplete_corpus: bool = True) -> dict:
         "queries": per_query,
         "aggregate": aggregate,
         "fully_covered_query_aggregate": covered_aggregate,
-        "reranker_delta": comparison,
-        "reranker_comparison": comparison_with_intervals,
+        "adaptive_query_expansion_delta": adaptive_expansion_comparison,
     }
-    _write_json_atomic(Path("data/eval_results.json"), result)
+    output_path = Path("data/eval_results.json" if mode == "all" else f"data/eval_results_{mode}.json")
+    _write_json_atomic(output_path, result)
     print("Evaluation results (exact source qrels)")
-    print(json.dumps({"aggregate": aggregate, "reranker_delta": comparison}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "aggregate": aggregate,
+                "adaptive_query_expansion_delta": adaptive_expansion_comparison,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    print(f"Saved: {output_path}")
     return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate retrieval against fixed source qrels.")
     parser.add_argument("--top-k", type=int, default=5, help="Evaluation cutoff (default: 5)")
+    parser.add_argument(
+        "--mode",
+        choices=("all", "hybrid", "adaptive"),
+        default="all",
+        help="Run one strategy and save it independently (default: all)",
+    )
     coverage_group = parser.add_mutually_exclusive_group()
     coverage_group.add_argument(
         "--require-complete-corpus",
@@ -386,6 +399,7 @@ def main() -> None:
     run_evaluation(
         k=args.top_k,
         allow_incomplete_corpus=not args.require_complete_corpus,
+        mode=args.mode,
     )
 
 

@@ -23,10 +23,16 @@ def _parser() -> argparse.ArgumentParser:
     retrieve = rag_commands.add_parser("retrieve")
     retrieve.add_argument("query")
     retrieve.add_argument("--top-k", type=int, default=5)
-    retrieve.add_argument("--rerank", action="store_true")
+    retrieve.add_argument("--adaptive-expand", action="store_true")
+    retrieve.add_argument("--expansions", type=int, default=3)
     retrieve.add_argument("--json", action="store_true")
     evaluate = rag_commands.add_parser("evaluate")
     evaluate.add_argument("--require-complete-corpus", action="store_true")
+    evaluate.add_argument(
+        "--mode",
+        choices=("all", "hybrid", "adaptive"),
+        default="all",
+    )
 
     agent = commands.add_parser("agent")
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
@@ -128,15 +134,28 @@ def main(argv: list[str] | None = None) -> int:
         _run_pipeline(args.skip_collection)
         return 0
     if args.command == "rag" and args.rag_command == "retrieve":
-        from qubettera.rag.retrieve import format_results, retrieve
+        from qubettera.rag.retrieve import _console_safe, format_results, retrieve
 
-        results = retrieve(args.query, top_k=args.top_k, rerank=args.rerank)
-        print(json.dumps(results, indent=2, default=str) if args.json else format_results(results))
+        results = retrieve(
+            args.query,
+            top_k=args.top_k,
+            expansion_count=args.expansions,
+            adaptive_expand=args.adaptive_expand,
+        )
+        output = (
+            json.dumps(results, indent=2, default=str, ensure_ascii=False)
+            if args.json
+            else format_results(results)
+        )
+        print(_console_safe(output))
         return 0
     if args.command == "rag" and args.rag_command == "evaluate":
         from qubettera.rag.evaluate import run_evaluation
 
-        run_evaluation(allow_incomplete_corpus=not args.require_complete_corpus)
+        run_evaluation(
+            allow_incomplete_corpus=not args.require_complete_corpus,
+            mode=args.mode,
+        )
         return 0
     if args.command == "agent" and args.agent_command == "opinion":
         from qubettera.agents.pipelines.opinion import generate_opinion

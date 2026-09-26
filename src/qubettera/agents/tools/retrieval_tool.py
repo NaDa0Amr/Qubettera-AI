@@ -20,36 +20,25 @@ from qubettera.rag.retrieve import retrieve as retrieve_from_rag
 logger = logging.getLogger(__name__)
 
 
-def retrieve(query: str, top_k: int = 5, rerank: bool = False) -> list[dict[str, Any]]:
+def retrieve(
+    query: str,
+    top_k: int = 5,
+    adaptive_expand: bool = False,
+) -> list[dict[str, Any]]:
     """Execute Qwen3 + PostgreSQL hybrid retrieval."""
-    return retrieve_from_rag(query=query, top_k=top_k, rerank=rerank)
-
-
-def _regenerate_query_with_llm(original_query: str, reason: str = "") -> str | None:
-    """Use the LLM to rewrite a query that failed to retrieve relevant documents."""
-    try:
-        from qubettera.agents.llm.factory import get_chat_model
-        from langchain_core.messages import HumanMessage
-
-        model = get_chat_model()
-        prompt = (
-            "You are an expert retrieval engineer for a technical knowledge base on Transformer architectures.\n"
-            f"The search query: '{original_query}' did not return relevant chunks from the database (issue: {reason or 'low similarity / no matches'}).\n"
-            "Rewrite it into an effective, concise technical search query (max 6-12 keywords) focusing on "
-            "core architecture terms, scaling laws, benchmark metrics, or specific concepts.\n"
-            "Return ONLY the new query string, without quotes or conversational filler."
-        )
-        response = model.invoke([HumanMessage(content=prompt)])
-        new_query = str(getattr(response, "content", "")).strip().strip('"\'')
-        if new_query and new_query.lower() != original_query.lower():
-            return new_query
-    except Exception as exc:
-        logger.debug("Query regeneration failed: %s", exc)
-    return None
+    return retrieve_from_rag(
+        query=query,
+        top_k=top_k,
+        adaptive_expand=adaptive_expand,
+    )
 
 
 @tool
-def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str:
+def knowledge_retrieval(
+    query: str,
+    top_k: int = 5,
+    adaptive_expand: bool = False,
+) -> str:
     """Search the local Qwen3/PostgreSQL knowledge base for grounded evidence.
 
     Use a focused natural-language query. Results contain text, title, source
@@ -57,29 +46,11 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
     Falls back to an error envelope when the service is unreachable.
     """
     try:
-        results = retrieve(query, top_k=top_k, rerank=rerank)
-
-        # Check if results are relevant: must be non-empty and have good distance (<= 0.40)
-        is_relevant = bool(results) and (
-            results[0].get("distance") is None or float(results[0].get("distance", 1.0)) <= 0.40
-        )
-        query_regenerated = False
-        effective_query = query
-
-        if not is_relevant:
-            reason = "no chunks found" if not results else f"weak similarity (distance={results[0].get('distance')})"
-            logger.info("Retrieval for '%s' returned no/weak relevant chunks (%s). Regenerating query via LLM...", query, reason)
-            regenerated = _regenerate_query_with_llm(query, reason=reason)
-            if regenerated:
-                logger.info("Regenerated retrieval query: '%s' -> '%s'", query, regenerated)
-                retry_results = retrieve(regenerated, top_k=top_k, rerank=rerank)
-                if retry_results:
-                    prev_dist = float(results[0].get("distance", 1.0)) if results and results[0].get("distance") is not None else 1.0
-                    new_dist = float(retry_results[0].get("distance", 1.0)) if retry_results[0].get("distance") is not None else 0.0
-                    if not results or new_dist <= prev_dist:
-                        results = retry_results
-                    query_regenerated = True
-                    effective_query = regenerated
+        retrieval_options = {
+            "top_k": top_k,
+            "adaptive_expand": adaptive_expand,
+        }
+        results = retrieve(query, **retrieval_options)
 
         documents = []
         for i, r in enumerate(results, start=1):
@@ -98,11 +69,9 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
             )
 
         envelope: dict[str, Any] = {"documents": documents}
-        if query_regenerated:
-            envelope["query_regenerated"] = True
-            envelope["original_query"] = query
-            envelope["regenerated_query"] = effective_query
-
+        envelope["query_expansion_used"] = any(
+            bool(result.get("query_expansion_used")) for result in results
+        )
         return json.dumps(envelope, ensure_ascii=False)
 
     except Exception as exc:
@@ -117,8 +86,18 @@ def knowledge_retrieval(query: str, top_k: int = 5, rerank: bool = False) -> str
 
 
 @tool("retrieve_knowledge_base")
-def retrieve_knowledge_base(query: str, top_k: int = 5, rerank: bool = False) -> str:
+def retrieve_knowledge_base(
+    query: str,
+    top_k: int = 5,
+    adaptive_expand: bool = False,
+) -> str:
     """Search the local Qwen3/PostgreSQL knowledge base for grounded evidence."""
-    return knowledge_retrieval.invoke({"query": query, "top_k": top_k, "rerank": rerank})
+    return knowledge_retrieval.invoke(
+        {
+            "query": query,
+            "top_k": top_k,
+            "adaptive_expand": adaptive_expand,
+        }
+    )
 
 

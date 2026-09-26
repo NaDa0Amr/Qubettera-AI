@@ -7,6 +7,7 @@ uses the same Qwen3/PostgreSQL retrieval service as the agent workflow.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from qubettera.agents.personas.loader import PersonaConfigError, load_persona
@@ -41,7 +42,12 @@ class TeamRetrievalProvider:
         retrieval_service: RetrievalService | None = None,
     ):
         self.top_k = top_k
-        self._service = retrieval_service or RetrievalService()
+        adaptive_expansion = os.environ.get(
+            "DISCUSSION_ADAPTIVE_EXPANSION", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._service = retrieval_service or RetrievalService(
+            adaptive_expand=adaptive_expansion
+        )
 
     def build_query(self, request: TurnRequest) -> str:
         """Build a focused query from the current discussion state.

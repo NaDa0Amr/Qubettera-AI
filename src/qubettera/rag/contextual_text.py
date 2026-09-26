@@ -1,4 +1,4 @@
-"""Build deterministic context-enriched text for embedding and reranking."""
+"""Build deterministic context-enriched text for embedding and retrieval."""
 
 from __future__ import annotations
 

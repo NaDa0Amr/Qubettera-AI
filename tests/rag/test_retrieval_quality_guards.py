@@ -17,7 +17,12 @@ from qubettera.rag.retrieve import (
     _rrf_fuse,
     _validate_index_identity,
     _validate_top_k,
+    _query_variants,
+    _retrieval_is_weak,
+    _weighted_rrf_fuse,
 )
+from qubettera.rag.query_expansion import parse_expansion_response
+from qubettera.rag.paper_filter import parse_review_response, review_potential_drop
 from qubettera.rag.run_pipeline import timed
 from qubettera.rag.settings import (
     EMBEDDING_MODEL,
@@ -46,7 +51,7 @@ def test_retrieval_limits_chunks_per_source():
     assert [item["chunk_id"] for item in _limit_per_source(results, 1)] == ["a1", "b1"]
 
 
-def test_rrf_preserves_contextual_text_for_reranking():
+def test_rrf_preserves_contextual_embedding_text():
     vector_results = [{
         "chunk_id": "a1",
         "text": "evidence",
@@ -54,6 +59,90 @@ def test_rrf_preserves_contextual_text_for_reranking():
     }]
     result = _rrf_fuse(vector_results, [])[0]
     assert result["embedding_text"] == "Document title: Paper\n\nevidence"
+
+
+def test_weighted_rrf_rewards_candidates_found_by_multiple_query_variants():
+    original = [{"chunk_id": "a", "text": "A"}, {"chunk_id": "b", "text": "B"}]
+    expansion = [{"chunk_id": "b", "text": "B"}]
+
+    results = _weighted_rrf_fuse(
+        [(original, 1.0, "original"), (expansion, 0.7, "expanded")]
+    )
+
+    assert results[0]["chunk_id"] == "b"
+    assert results[0]["matched_queries"] == ["original", "expanded"]
+
+
+def test_query_expansion_keeps_original_first_and_deduplicates_variants():
+    variants = _query_variants(
+        "mixture of experts routing",
+        expand=True,
+        expansion_count=3,
+        query_expander=lambda query, count: [
+            query.upper(),
+            "sparse expert load balancing",
+            "MoE token routing capacity",
+        ],
+    )
+
+    assert variants == [
+        "mixture of experts routing",
+        "sparse expert load balancing",
+        "MoE token routing capacity",
+    ]
+
+
+def test_query_expansion_parser_accepts_json_and_rejects_original_query():
+    response = '["linear attention", "softmax approximation kernels", "attention tradeoffs"]'
+
+    assert parse_expansion_response(response, "linear attention", 2) == [
+        "softmax approximation kernels",
+        "attention tradeoffs",
+    ]
+
+
+def test_query_expansion_failure_falls_back_to_original(caplog):
+    def broken_expander(query, count):
+        raise RuntimeError("provider unavailable")
+
+    assert _query_variants(
+        "flash attention memory efficiency",
+        expand=True,
+        expansion_count=2,
+        query_expander=broken_expander,
+    ) == ["flash attention memory efficiency"]
+
+
+def test_adaptive_expansion_only_marks_low_similarity_results_as_weak():
+    assert _retrieval_is_weak([{"similarity": 0.31}], min_similarity=0.55)
+    assert not _retrieval_is_weak([{"similarity": 0.72}], min_similarity=0.55)
+    assert _retrieval_is_weak([], min_similarity=0.55)
+
+
+def test_paper_review_parser_requires_an_explicit_keep_or_drop_decision():
+    assert parse_review_response(
+        '```json\n{"decision":"keep","reason":"directly evaluates MoE routing"}\n```'
+    )["decision"] == "keep"
+    with pytest.raises(ValueError, match="keep/drop"):
+        parse_review_response('{"decision":"maybe"}')
+
+
+def test_paper_llm_review_is_reused_from_the_content_cache(monkeypatch):
+    calls = []
+    monkeypatch.setenv("PAPER_FILTER_LLM_ENABLED", "true")
+
+    def fake_review(title, text):
+        calls.append((title, text))
+        return {"decision": "drop", "reason": "only a passing citation"}
+
+    monkeypatch.setattr("qubettera.rag.paper_filter._review_with_llm", fake_review)
+    cache = {}
+    first = review_potential_drop("Paper", "Body", cache)
+    second = review_potential_drop("Paper", "Body", cache)
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert len(calls) == 1
 
 
 def test_source_limit_normalizes_arxiv_versions_and_trailing_slashes():
@@ -115,10 +204,10 @@ def test_evaluation_allows_a_diagnostic_run_by_default():
     assert parameter.default is True
 
 
-def test_retrieval_defaults_to_evaluated_hybrid_only_mode():
+def test_retrieval_has_no_reranking_option():
     from qubettera.rag.retrieve import retrieve
 
-    assert inspect.signature(retrieve).parameters["rerank"].default is False
+    assert "rerank" not in inspect.signature(retrieve).parameters
 
 
 def test_query_embedding_uses_model_retrieval_prompt_when_available():

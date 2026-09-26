@@ -89,7 +89,7 @@ def generate_opinion(
     persona = load_persona(persona_id)
     query = build_retrieval_query(persona, topic)
     tool_output = str(
-        retrieve_knowledge_base.invoke({"query": query, "top_k": 5, "rerank": False})
+        retrieve_knowledge_base.invoke({"query": query, "top_k": 5})
     )
     documents = _parse_documents(tool_output)
     prompt = render_opinion_prompt(persona, topic.strip(), documents)

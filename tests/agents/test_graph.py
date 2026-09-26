@@ -34,7 +34,7 @@ def test_react_loop_executes_tool_and_records_normalized_documents(monkeypatch):
     monkeypatch.setattr(
         retrieval_tool,
         "retrieve",
-        lambda query, top_k, rerank: [
+        lambda query, top_k, adaptive_expand: [
             {
                 "text": "measured evidence",
                 "url": "https://example.test/moe",

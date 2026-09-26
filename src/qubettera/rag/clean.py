@@ -30,6 +30,11 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qubettera.rag.jsonl import load_jsonl, write_jsonl_atomic
+from qubettera.rag.paper_filter import (
+    load_review_cache,
+    review_potential_drop,
+    save_review_cache,
+)
 
 try:
     import emoji
@@ -311,6 +316,8 @@ def run():
 
     # Phase 3: Clean, filter by length, and check relevance.
     kept, dropped = [], list(dedup_dropped) + list(url_dropped)
+    review_cache = load_review_cache()
+    review_cache_size = len(review_cache)
     collect_date = datetime.now(timezone.utc).isoformat()
 
     for doc in deduped:
@@ -332,9 +339,25 @@ def run():
         _, title_strong_hits = relevance_check(title)
         hits, strong_hits = relevance_check(f"{title}\n{md[:RELEVANCE_WINDOW_CHARS]}")
         if strong_hits < MIN_STRONG_HITS and title_strong_hits < 1:
-            doc["_drop_reason"] = f"low_relevance (hits={hits}, strong={strong_hits})"
-            dropped.append(doc)
-            continue
+            review = review_potential_drop(title, md, review_cache)
+            if review and review.get("error"):
+                raise RuntimeError(
+                    "LLM paper review is enabled but unavailable: "
+                    f"{review['error']}. Start the configured reviewer or set "
+                    "PAPER_FILTER_LLM_ENABLED=false."
+                )
+            if review and review.get("decision") == "keep":
+                doc["_llm_relevance_review"] = review
+            else:
+                suffix = ""
+                if review and review.get("decision") == "drop":
+                    suffix = f"; llm={review.get('reason', 'drop')}"
+                    doc["_llm_relevance_review"] = review
+                doc["_drop_reason"] = (
+                    f"low_relevance (hits={hits}, strong={strong_hits}{suffix})"
+                )
+                dropped.append(doc)
+                continue
 
         doc["markdown"] = md
         doc["_relevance_hits"] = hits
@@ -344,6 +367,8 @@ def run():
 
     write_jsonl_atomic(CLEAN_PATH, kept)
     write_jsonl_atomic(DROPPED_PATH, dropped)
+    if len(review_cache) != review_cache_size:
+        save_review_cache(review_cache)
 
     print(f"Kept:    {len(kept)}  -> {CLEAN_PATH}")
     print(f"Dropped: {len(dropped)} -> {DROPPED_PATH}")

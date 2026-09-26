@@ -19,6 +19,17 @@ def _positive_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be > 0, got {value}")
     return value
 
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw_value = os.environ.get(name, str(default))
+    try:
+        value = float(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a number, got {raw_value!r}") from error
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}, got {value}")
+    return value
+
 PIPELINE_VERSION = os.environ.get(
     "PIPELINE_VERSION", "rag-pipeline-2026.09.01-context-v1"
 )
@@ -33,10 +44,9 @@ EMBEDDING_MODEL_REVISION = os.environ.get("EMBEDDING_MODEL_REVISION", "main")
 EMBEDDING_DIM = _positive_int_env("EMBEDDING_DIM", 1024)
 EMBEDDING_BATCH_SIZE = _positive_int_env("EMBEDDING_BATCH_SIZE", 8)
 
-RERANKER_MODEL = os.environ.get(
-    "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+ADAPTIVE_EXPANSION_MIN_SIMILARITY = _bounded_float_env(
+    "ADAPTIVE_EXPANSION_MIN_SIMILARITY", 0.55, -1.0, 1.0
 )
-RERANKER_MODEL_REVISION = os.environ.get("RERANKER_MODEL_REVISION", "main")
 
 
 def get_embedding_device() -> str:
