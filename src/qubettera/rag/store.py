@@ -39,7 +39,8 @@ def get_db_config() -> dict:
 def _source_hashes() -> set[str]:
     hashes: set[str] = set()
     chunk_ids: set[str] = set()
-    for chunk in iter_jsonl(CHUNKS_PATH):
+    source_file = CHUNKS_PATH if CHUNKS_PATH.exists() else EMBEDDED_PATH
+    for chunk in iter_jsonl(source_file):
         chunk_id = chunk.get("chunk_id")
         content_hash = chunk.get("content_hash")
         if not chunk_id or chunk_id in chunk_ids:

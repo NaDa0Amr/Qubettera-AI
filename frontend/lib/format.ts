@@ -67,8 +67,10 @@ export function formatDuration(ms: number): string {
 
 /**
  * Truncate a string to maxLen characters, appending ellipsis if needed.
+ * Returns an empty string for null/undefined input.
  */
-export function truncate(str: string, maxLen: number): string {
+export function truncate(str: string | null | undefined, maxLen: number): string {
+  if (str === null || str === undefined) return "";
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 1) + "…";
 }

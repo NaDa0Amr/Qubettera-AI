@@ -29,6 +29,23 @@ def _number_env(name: str, default: str, cast):
         raise RuntimeError(f"{name} has an invalid value: {raw!r}") from exc
 
 
+def _thinking_extra_body() -> dict | None:
+    """Return the request options needed to disable a thinking pass, if disabled.
+
+    Reasoning models (e.g. Qwen3.x) think before answering, which improves
+    answer quality but spends part of the ``max_tokens`` budget. Thinking is
+    enabled by default; set MODEL_ENABLE_THINKING=false for models that would
+    otherwise burn the whole answer budget on hidden reasoning and return empty
+    content with ``finish_reason="length"``.
+
+    This must be set at construction rather than via ``bind()``: a bound model
+    drops ``extra_body`` when ``bind_tools()`` is applied, so the option would
+    never reach the request.
+    """
+    enabled = os.getenv("MODEL_ENABLE_THINKING", "true").strip().lower() not in {"0", "false", "no", "off"}
+    return None if enabled else {"chat_template_kwargs": {"enable_thinking": False}}
+
+
 def _rate_limit_wait_seconds(error_message: str) -> float | None:
     """Parse Groq's 'Please try again in X.Xs' message and return seconds."""
     match = re.search(r"try again in (\d+(?:\.\d+)?)s", str(error_message), re.IGNORECASE)
@@ -164,6 +181,7 @@ def get_chat_model(
             temperature=temperature,
             max_tokens=_number_env("WANDB_MAX_TOKENS", os.getenv("OPENROUTER_MAX_TOKENS", "2048"), int),
             default_headers=default_headers,
+            extra_body=_thinking_extra_body(),
             callbacks=callbacks,
         )
 

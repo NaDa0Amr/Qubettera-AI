@@ -174,6 +174,14 @@ including prompts, history, tool schemas and results, repair, and synthesis,
 with 512 tokens reserved for framing. Smaller contexts can admit fewer sources.
 Summarization and fallback trimming are bounded too; URLs are never cut midway.
 
+Thinking is enabled by default (`MODEL_ENABLE_THINKING=true`), so reasoning
+models such as `Qwen/Qwen3.6-35B-A3B` can deliberate before answering. Hidden
+reasoning counts toward the generation budget, so `MODEL_ANSWER_TOKENS` must be
+large enough to hold the thinking pass plus the answer. A model that exhausts
+the budget on reasoning returns empty content with a `length` finish reason and
+no error, which surfaces as an agent that "returned no final response"; set
+`MODEL_ENABLE_THINKING=false` for such a model to skip the thinking pass.
+
 `CHECKPOINT_BACKEND=memory` is the default. For durable agent threads, set
 `CHECKPOINT_BACKEND=postgres` and `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
 (optional `PGPORT`). Invalid configuration fails explicitly. The CLI keeps the

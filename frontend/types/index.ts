@@ -28,10 +28,11 @@ export interface PersonasResponse {
 
 export interface DiscussionSummary {
   discussion_id: string;
-  topic: string;
+  // Null for discussions that failed before a topic was recorded.
+  topic: string | null;
   created_at: string;
-  num_rounds: number;
-  num_agents: number;
+  num_rounds: number | null;
+  num_agents: number | null;
   status: "running" | "completed" | "failed";
   has_analytics: boolean;
 }
