@@ -190,3 +190,5 @@ your account requires a project header. A process already running on Kaggle
 continues with its original settings when `.env` changes. For slow
 generation, increase `LLM_TIMEOUT_SECONDS` in `.env` (for example, to `600`).
 Connection failures stop the run without launching a second generation request.
+
+embedded chunks : https://drive.google.com/file/d/1Nv-i-2v53nrCVPypDIdcAHbrOfJnAw-X/view?usp=sharing
