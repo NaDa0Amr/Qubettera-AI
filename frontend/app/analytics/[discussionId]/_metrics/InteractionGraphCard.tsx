@@ -1,8 +1,7 @@
+/* eslint-disable @next/next/no-img-element -- Backend charts have runtime dimensions and use the local image proxy. */
 "use client";
 
-import Image from "next/image";
 import { useState } from "react";
-import { ImageOff } from "lucide-react";
 import type { AnalyticsState } from "@/types";
 import { getAgentColor } from "@/lib/palette";
 
@@ -76,7 +75,7 @@ export function InteractionGraphCard({
             {agentIds.map((srcId, si) =>
               agentIds
                 .filter((_, ti) => ti !== si)
-                .map((tgtId, ti) => {
+                .map((tgtId) => {
                   const src = positions[si];
                   const tgt = positions[agentIds.indexOf(tgtId)];
                   const inf = influenceMap.get(srcId) ?? 0;
@@ -99,7 +98,6 @@ export function InteractionGraphCard({
             {agentIds.map((id, i) => {
               const pos = positions[i];
               const color = getAgentColor(id);
-              const label = agentLabel(id).split(" ").slice(0, 2).join("\n");
               return (
                 <g key={id}>
                   <circle cx={pos.x} cy={pos.y} r={28} fill={color} opacity={0.85} />
@@ -129,7 +127,7 @@ export function InteractionGraphCard({
   return (
     <div>
       <div className="relative w-full overflow-hidden rounded-lg bg-slate-50 dark:bg-slate-800">
-        {/* Next.js Image for the backend-generated PNG */}
+        {/* Backend-generated PNG with runtime dimensions. */}
         <div className="relative min-h-64">
           <img
             src={graphUrl}

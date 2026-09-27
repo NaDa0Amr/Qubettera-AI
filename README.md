@@ -32,15 +32,14 @@ Query expansion can use a separate local Ollama model. Set
 `QUERY_EXPANSION_BASE_URL=http://localhost:11434` without changing the main
 generation provider.
 
-## Commands
-
 ## Web application
 
 The merged application lives in `frontend/` (Next.js) and `backend/` (FastAPI).
 The backend imports `src/qubettera` directly and shares the CLI's root `.env`,
 `resources/`, `outputs/discussions/`, and `outputs/analytics/`.
-The original `Frontend-Deployment-Production/` handoff is retained locally as
-an ignored reference; its bundled legacy engines are not used.
+The deployment handoff is consolidated into these folders. The API uses the
+shared engines in `src/qubettera/`; no nested legacy repositories are required.
+See [frontend setup](frontend/README.md) and [integration notes](docs/web-integration.md).
 
 Install the web dependencies from the project root:
 
@@ -92,6 +91,7 @@ Verification:
 
 ```powershell
 python -m pytest tests/test_web_integration.py
+npm --prefix frontend run lint
 npm --prefix frontend run typecheck
 npm --prefix frontend run build
 ```
@@ -112,8 +112,9 @@ qubettera discuss run --mode live --analyze
 qubettera analytics run outputs/discussions/<discussion-id>.jsonl
 ```
 
-`--adaptive-expand` first runs normal hybrid retrieval and invokes the query
-`ADAPTIVE_EXPANSION_MIN_SIMILARITY` (default `0.55`). Set
+`--adaptive-expand` first runs normal hybrid retrieval and invokes query
+expansion when similarity falls below `ADAPTIVE_EXPANSION_MIN_SIMILARITY`
+(default `0.55`). Set
 `DISCUSSION_ADAPTIVE_EXPANSION=true` to use it during live discussions; plain
 hybrid retrieval remains the default.
 

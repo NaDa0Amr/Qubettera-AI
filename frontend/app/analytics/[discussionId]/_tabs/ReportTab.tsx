@@ -1,6 +1,7 @@
+/* eslint-disable @next/next/no-img-element -- Report images have runtime dimensions and are served by the backend proxy. */
 "use client";
 
-import { useState, useEffect } from "react";
+import { useResource } from "@/hooks/useResource";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, FileText } from "lucide-react";
@@ -14,32 +15,16 @@ interface ReportTabProps {
   reportStatus: MetricStatus;
 }
 
+async function parseReport(response: Response): Promise<string> {
+  return response.text();
+}
+
 export function ReportTab({ discussionId, reportStatus }: ReportTabProps) {
-  const [markdown, setMarkdown] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const isReady = reportStatus.state === "ready";
-
-  useEffect(() => {
-    if (!isReady) return;
-    setLoading(true);
-    setError(null);
-
-    fetch(`/api/week4/report/${discussionId}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Report not available (HTTP ${res.status})`);
-        return res.text();
-      })
-      .then((text) => {
-        setMarkdown(text);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Failed to load report.");
-        setLoading(false);
-      });
-  }, [isReady, discussionId]);
+  const { data: markdown, loading, error } = useResource(
+    isReady ? `/api/week4/report/${encodeURIComponent(discussionId)}` : null,
+    parseReport,
+  );
 
   function downloadReport() {
     if (!markdown) return;

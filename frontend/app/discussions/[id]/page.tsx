@@ -1,7 +1,7 @@
 "use client";
 
 import { use } from "react";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useDiscussion } from "@/contexts/DiscussionContext";
 import { ChatView } from "@/components/discussion/ChatView";
@@ -23,9 +23,14 @@ interface PageProps {
 export default function DiscussionPage({ params }: PageProps) {
   const { id } = use(params);
   const { state, startDiscussion } = useDiscussion();
-  const [replayData, setReplayData] = useState<DiscussionDetail | null>(null);
-  const [replayLoading, setReplayLoading] = useState(false);
-  const [replayError, setReplayError] = useState<string | null>(null);
+  const [replay, setReplay] = useState<{
+    id: string;
+    data?: DiscussionDetail;
+    error?: string;
+  } | null>(null);
+  const replayData = replay?.id === id ? replay.data : undefined;
+  const replayError = replay?.id === id ? replay.error : undefined;
+  const replayLoading = replay?.id !== id;
 
   // A discussion is "live" when the React context has an active SSE stream:
   //   a) Context ID matches URL and stream isn't idle, OR
@@ -36,92 +41,38 @@ export default function DiscussionPage({ params }: PageProps) {
     (state.status === "streaming" && state.discussionId === null);
 
   // ── Replay (no live SSE context) ─────────────────────────────────────────
-  // When the user reaches this page via page-refresh, History-tab link, or
-  // direct URL the context starts idle, so isLive is false. We fetch the
-  // transcript from the REST API and poll every 3 s while status is "running"
-  // so that an ongoing discussion still updates without needing an SSE
-  // re-attachment mechanism on the backend.
-
-  // Number of consecutive polls that returned the same message count.
-  const staleCountRef = useRef(0);
-  // Message count from the previous poll — used to detect stability.
-  const prevMsgCountRef = useRef(-1);
-
-  const fetchReplay = useCallback(() => {
-    return fetch(`/api/discussions/${id}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<DiscussionDetail>;
-      });
-  }, [id]);
-
-  // Initial fetch — fires whenever id, isLive, or stream status changes.
+  // Poll active transcripts until the backend reports a terminal state.
+  // Slow model turns can take minutes without producing a new message.
   useEffect(() => {
-    if (isLive || state.status === "streaming") return;
-    setReplayLoading(true);
-    setReplayError(null);
-    staleCountRef.current = 0;
-    prevMsgCountRef.current = -1;
-    fetchReplay()
-      .then((data) => {
-        prevMsgCountRef.current = data.messages.length;
-        setReplayData(data);
-        setReplayLoading(false);
-      })
-      .catch((err: unknown) => {
-        setReplayError(err instanceof Error ? err.message : "Failed to load discussion.");
-        setReplayLoading(false);
-      });
-  }, [id, isLive, state.status, fetchReplay]);
-
-  // Polling — starts after initial load when the discussion is still running.
-  useEffect(() => {
-    // Only poll in replay mode and after the initial load has finished.
-    if (isLive || state.status === "streaming") return;
-    if (replayLoading || !replayData) return;
-    // Stop polling immediately if the transcript is already in a terminal state.
-    if (replayData.status === "completed" || replayData.status === "failed") return;
-    // staleCountRef is incremented inside the interval without triggering a
-    // re-render, so we must also check it here on every effect re-run.
-    if (staleCountRef.current >= 3) return;
-
-    const interval = setInterval(() => {
-      fetchReplay()
-        .then((data) => {
-          const newCount = data.messages.length;
-          const isTerminal =
-            data.status === "completed" || data.status === "failed";
-
-          if (newCount > prevMsgCountRef.current) {
-            // New messages arrived — update UI and reset stale counter.
-            staleCountRef.current = 0;
-            prevMsgCountRef.current = newCount;
-            setReplayData(data); // triggers effect re-run for next interval
-          } else {
-            // No new messages this poll.
-            staleCountRef.current += 1;
-          }
-
-          if (isTerminal) {
-            // Discussion finished — show final state and stop polling.
-            setReplayData(data);
-            clearInterval(interval); // self-terminate immediately
-          } else if (staleCountRef.current >= 3) {
-            // 9 s of no new messages — assume the discussion has ended
-            // without a proper completion event (e.g. backend crashed).
-            clearInterval(interval); // self-terminate immediately
-          }
-        })
-        .catch(() => {
-          staleCountRef.current += 1;
-          if (staleCountRef.current >= 3) {
-            clearInterval(interval);
-          }
+    if (isLive) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function loadReplay() {
+      try {
+        const response = await fetch(`/api/discussions/${encodeURIComponent(id)}`, {
+          signal: controller.signal,
         });
-    }, 3_000);
-
-    return () => clearInterval(interval);
-  }, [id, isLive, state.status, replayLoading, replayData, fetchReplay]);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data: DiscussionDetail = await response.json();
+        if (controller.signal.aborted) return;
+        setReplay({ id, data });
+        if (data.status === "running") timer = setTimeout(loadReplay, 3_000);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setReplay((previous) => ({
+          id,
+          data: previous?.id === id ? previous.data : undefined,
+          error: error instanceof Error ? error.message : "Failed to load discussion.",
+        }));
+        timer = setTimeout(loadReplay, 3_000);
+      }
+    }
+    void loadReplay();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [id, isLive]);
 
   // Toast on discussion completion.
   useEffect(() => {
@@ -163,7 +114,9 @@ export default function DiscussionPage({ params }: PageProps) {
   // replayRunning = discussion is ongoing but this tab has no SSE connection
   // (page-refresh / History-tab link); we are polling REST for updates.
   const replayRunning = !isLive && replayData?.status === "running";
-  const streamStatus = isLive ? state.status : "done";
+  const streamStatus = isLive ? state.status
+    : replayData?.status === "completed" ? "done"
+    : replayData?.status === "failed" ? "error" : "idle";
   const topicLabel = isLive
     ? (state.config?.brief.objective ?? "Discussion")
     : (replayData?.topic ?? id);

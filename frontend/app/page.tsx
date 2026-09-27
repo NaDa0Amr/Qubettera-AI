@@ -1,35 +1,15 @@
 import Link from "next/link";
 import { ArrowRight, MessageSquare, BarChart2, Database, Bot, Layers, Brain, Check } from "lucide-react";
-import type { Persona, PersonasResponse } from "@/types";
+import type { Persona } from "@/types";
+import { getPersonas } from "@/lib/backend";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Multi-Agent Opinion Simulator — AI Transformer Architecture Debates",
+  title: "Evidence-based AI discussions",
   description:
     "Watch AI agents with distinct personas debate transformer architecture choices in real time. Grounded on a real knowledge base. Analyzed for opinion dynamics.",
 };
-
-async function fetchPersonas(): Promise<PersonasResponse> {
-  try {
-    const res = await fetch(
-      `${process.env.FASTAPI_INTERNAL_URL ?? "http://localhost:8000"}/personas`,
-      { next: { revalidate: 3600 } },
-    );
-    if (!res.ok) throw new Error("upstream");
-    const raw = await res.json();
-    const personas: Persona[] = Array.isArray(raw)
-      ? raw
-      : (raw as { personas?: Persona[] }).personas ?? [];
-    return { personas };
-  } catch {
-    // Fall back to the static mock file.
-    const mock = await import("@/lib/mocks/personas.json");
-    const mockVal = mock.default as unknown;
-    const personas: Persona[] = Array.isArray(mockVal)
-      ? (mockVal as Persona[])
-      : ((mockVal as { personas?: Persona[] })?.personas ?? []);
-    return { personas };
-  }
-}
 
 // Deterministic color for a persona by simple index (server-safe, no hash needed here).
 const STANCE_COLORS = [
@@ -40,7 +20,14 @@ const STANCE_COLORS = [
 ];
 
 export default async function HomePage() {
-  const { personas = [] } = await fetchPersonas();
+  let personas: Persona[] = [];
+  let personasUnavailable = false;
+  try {
+    personas = await getPersonas();
+  } catch {
+    // Keep the introduction available while the backend is offline.
+    personasUnavailable = true;
+  }
 
   const steps = [
     {
@@ -56,12 +43,12 @@ export default async function HomePage() {
     {
       icon: Database,
       title: "Evidence from a real knowledge base",
-      body: "Each turn, agents retrieve semantically relevant chunks from 50+ AI Transformer papers stored in Supabase pgvector.",
+      body: "Agents retrieve relevant evidence from your configured research collection using hybrid search.",
     },
     {
       icon: BarChart2,
       title: "Analyze opinion trajectories",
-      body: "See how stances shift across rounds, measure agreement, influence, and sentiment — all powered by ModernBERT.",
+      body: "Explore changes in stance, agreement, influence, and sentiment across the discussion.",
     },
   ];
 
@@ -90,7 +77,7 @@ export default async function HomePage() {
         <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-sm text-indigo-300">
             <Brain className="h-4 w-4" aria-hidden="true" />
-            Qubeterra AI NextGen Program — Week 5
+            Qubettera · Evidence-based AI discussions
           </div>
           <h1 className="text-4xl font-extrabold tracking-tight text-white sm:text-6xl">
             Multi-Agent{" "}
@@ -140,7 +127,7 @@ export default async function HomePage() {
               },
               {
                 title: "RAG-Grounded Evidence",
-                body: "Every agent turn is supported by semantic retrieval from 50+ AI Transformer research documents stored in Supabase pgvector. Claims are backed by real citations, not confabulated facts.",
+                body: "Live discussions retrieve evidence from your research collection. Source citations accompany responses, and unresolved citation issues are flagged.",
               },
             ].map((item) => (
               <div key={item.title}>
@@ -243,7 +230,9 @@ export default async function HomePage() {
                 Meet the Agents
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                {personas.length} personas with distinct expertise and stances
+                {personasUnavailable
+                  ? "Personas are temporarily unavailable. Check the backend connection."
+                  : `${personas.length} personas with distinct expertise and stances`}
               </p>
             </div>
             <Link
@@ -313,9 +302,9 @@ export default async function HomePage() {
             {[
               "Next.js 16",
               "FastAPI",
-              "Supabase pgvector",
+              "PostgreSQL + pgvector",
               "LangGraph",
-              "ModernBERT",
+              "Qwen3 retrieval",
               "Recharts",
               "TypeScript",
               "Tailwind CSS v4",

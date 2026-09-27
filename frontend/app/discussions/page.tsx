@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Tabs, TabPanel } from "@/components/ui/Tabs";
 import { MessageSquare, Clock, Users } from "lucide-react";
 import { RunTab } from "./_tabs/RunTab";
@@ -20,23 +20,19 @@ const TABS = [
 function DiscussionsContent() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab") as TabId | null;
-  const [activeTab, setActiveTab] = useState<TabId>(
-    tabParam && ["run", "history", "personas"].includes(tabParam) ? tabParam : "run",
-  );
-
-  // Sync tab from URL param on navigation (e.g. links with ?tab=personas from home page).
-  useEffect(() => {
-    if (tabParam && ["run", "history", "personas"].includes(tabParam)) {
-      setActiveTab(tabParam as TabId);
-    }
-  }, [tabParam]);
+  const router = useRouter();
+  const activeTab = tabParam && ["run", "history", "personas"].includes(tabParam) ? tabParam : "run";
 
   return (
     <>
       <Tabs
         tabs={TABS}
         activeTab={activeTab}
-        onTabChange={(id) => setActiveTab(id as TabId)}
+        onTabChange={(id) => {
+          const nextParams = new URLSearchParams(searchParams.toString());
+          nextParams.set("tab", id);
+          router.replace(`/discussions?${nextParams}`, { scroll: false });
+        }}
       />
       <div className="mt-6">
         <TabPanel id="run" activeTab={activeTab}>

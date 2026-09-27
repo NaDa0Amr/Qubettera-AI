@@ -25,7 +25,7 @@ COPY . .
 # NEXT_PUBLIC_* vars are inlined into the client JS bundle at build time.
 # They must be present during `npm run build`, not just at container start.
 # Pass them via docker-compose `build.args` or `--build-arg` on the CLI.
-ARG NEXT_PUBLIC_APP_NAME="Multi-Agent Opinion Simulator"
+ARG NEXT_PUBLIC_APP_NAME="Qubettera"
 ENV NEXT_PUBLIC_APP_NAME=$NEXT_PUBLIC_APP_NAME
 ENV NEXT_TELEMETRY_DISABLED=1
 

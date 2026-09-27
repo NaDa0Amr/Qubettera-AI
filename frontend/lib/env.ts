@@ -9,5 +9,5 @@ export const serverEnv = {
 
 export const publicEnv = {
   appName:
-    process.env.NEXT_PUBLIC_APP_NAME ?? "Multi-Agent Opinion Simulator",
+    process.env.NEXT_PUBLIC_APP_NAME ?? "Qubettera",
 };

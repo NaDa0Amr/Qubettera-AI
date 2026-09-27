@@ -94,8 +94,7 @@ export function InfluenceCard({ data }: InfluenceCardProps) {
           {
             key: "influence",
             header: "Influence",
-            render: (v, row) => {
-              const r = row as typeof tableRows[number];
+            render: (v) => {
               if (v == null) {
                 return (
                   <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
@@ -119,7 +118,7 @@ export function InfluenceCard({ data }: InfluenceCardProps) {
           {
             key: "note",
             header: "Note",
-            render: (v, row) => {
+            render: (_value, row) => {
               const r = row as typeof tableRows[number];
               if (!r.note) return <span className="text-slate-300">—</span>;
               return (

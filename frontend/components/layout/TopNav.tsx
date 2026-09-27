@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { publicEnv } from "@/lib/env";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import { Brain, MessageSquare, BarChart2, Menu, X } from "lucide-react";
@@ -26,13 +27,13 @@ export function TopNav() {
         <Link
           href="/"
           className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white"
-          aria-label="Multi-Agent Opinion Simulator — home"
+          aria-label={`${publicEnv.appName} — home`}
         >
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
             <Brain className="h-5 w-5 text-white" aria-hidden="true" />
           </div>
           <span className="hidden sm:block text-sm">
-            Multi-Agent Simulator
+            {publicEnv.appName}
           </span>
         </Link>
 
@@ -68,6 +69,7 @@ export function TopNav() {
           className="md:hidden rounded-md p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
           onClick={() => setMobileOpen((o) => !o)}
           aria-expanded={mobileOpen}
+          aria-controls="mobile-navigation"
           aria-label="Toggle navigation menu"
         >
           {mobileOpen ? (
@@ -80,7 +82,7 @@ export function TopNav() {
 
       {/* Mobile menu panel */}
       {mobileOpen && (
-        <div className="md:hidden border-t border-slate-200 dark:border-slate-800 px-4 pb-4 pt-2">
+        <div id="mobile-navigation" className="md:hidden border-t border-slate-200 dark:border-slate-800 px-4 pb-4 pt-2">
           <ul role="list" className="space-y-1">
             {NAV_LINKS.map(({ href, label, icon: Icon }) => {
               const active =

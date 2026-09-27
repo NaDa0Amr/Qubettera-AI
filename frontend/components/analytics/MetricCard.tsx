@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -27,12 +27,6 @@ interface MetricCardProps {
   staggerIndex?: number;
 }
 
-// Tunable timings — kept as module constants so they're easy to adjust
-// without touching the render logic.
-const STAGGER_STEP_MS = 80;   // delay between consecutive cards' fades
-const FADE_IN_MS = 500;       // ready content fade-in duration
-const CROSSFADE_MS = 250;     // skeleton overlay fade-out duration
-
 export function MetricCard({
   title,
   description,
@@ -42,66 +36,6 @@ export function MetricCard({
   minHeight = "min-h-64",
   staggerIndex = 0,
 }: MetricCardProps) {
-  // readyOpacity: 0 → 1 when the metric content fades in.
-  // crossfadeOpacity: 1 → 0 for the briefly-retained skeleton overlay.
-  // Both are driven by state updates so the transition is smooth regardless
-  // of which Tailwind animation plugins are installed.
-  const [readyOpacity, setReadyOpacity] = useState(status.state === "ready" ? 1 : 0);
-  const [crossfadeOpacity, setCrossfadeOpacity] = useState(0);
-  const [showCrossfade, setShowCrossfade] = useState(false);
-  const prevStateRef = useRef(status.state);
-
-  useEffect(() => {
-    const prev = prevStateRef.current;
-    prevStateRef.current = status.state;
-
-    // Detect the running/pending → ready transition. This is the only edge
-    // that should trigger the fade + crossfade animation; subsequent renders
-    // while already ready leave the card in its final visual state.
-    if (prev !== "ready" && status.state === "ready") {
-      const delayMs = staggerIndex * STAGGER_STEP_MS;
-
-      // 1. After the stagger delay, mount the skeleton overlay at full
-      //    opacity so it briefly appears on top of the ready content.
-      const mountCrossfade = setTimeout(() => {
-        setShowCrossfade(true);
-        setCrossfadeOpacity(1);
-      }, delayMs);
-
-      // 2. On the next tick, drop its opacity to 0. The `transition` CSS
-      //    property handles the smooth 250ms fade-out.
-      const fadeCrossfade = setTimeout(() => {
-        setCrossfadeOpacity(0);
-      }, delayMs + 20);
-
-      // 3. Unmount the overlay once the fade completes.
-      const unmountCrossfade = setTimeout(() => {
-        setShowCrossfade(false);
-      }, delayMs + CROSSFADE_MS + 50);
-
-      // 4. Fade the ready content in over FADE_IN_MS, starting at the
-      //    same moment the crossfade begins.
-      const fadeContent = setTimeout(() => {
-        setReadyOpacity(1);
-      }, delayMs);
-
-      return () => {
-        clearTimeout(mountCrossfade);
-        clearTimeout(fadeCrossfade);
-        clearTimeout(unmountCrossfade);
-        clearTimeout(fadeContent);
-      };
-    }
-
-    // If the state leaves ready (e.g. on retry), reset the animation state
-    // so the next transition replays cleanly.
-    if (status.state !== "ready") {
-      setReadyOpacity(0);
-      setCrossfadeOpacity(0);
-      setShowCrossfade(false);
-    }
-  }, [status.state, staggerIndex]);
-
   return (
     <div
       className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 shadow-sm overflow-hidden"
@@ -167,34 +101,9 @@ export function MetricCard({
         {status.state === "pending" && <PendingSkeleton />}
         {status.state === "running" && <RunningSkeleton />}
 
-        {/* Ready content. Opacity is state-driven so the transition runs
-            with a plain CSS `transition` — no Tailwind animation plugin
-            required. */}
         {status.state === "ready" && (
-          <div
-            style={{
-              opacity: readyOpacity,
-              transition: `opacity ${FADE_IN_MS}ms ease-out`,
-            }}
-          >
+          <div className="metric-reveal" style={{ animationDelay: `${Math.min(staggerIndex, 5) * 80}ms` }}>
             {children(status.data)}
-          </div>
-        )}
-
-        {/* Crossfade overlay (change B). During the short window after the
-            metric becomes ready, the previous skeleton is re-rendered on
-            top of the new content and fades from full opacity to 0. The
-            user perceives a smooth dissolve rather than an instant swap. */}
-        {showCrossfade && (
-          <div
-            className="pointer-events-none absolute inset-0 px-5 py-5"
-            style={{
-              opacity: crossfadeOpacity,
-              transition: `opacity ${CROSSFADE_MS}ms ease-out`,
-            }}
-            aria-hidden="true"
-          >
-            <RunningSkeleton />
           </div>
         )}
 
