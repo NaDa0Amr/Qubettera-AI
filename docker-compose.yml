@@ -15,6 +15,43 @@ services:
       timeout: 5s
       retries: 12
 
+  backend:
+    profiles: [web]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./data:/app/data
+      - qubettera-models:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    profiles: [web]
+    build: ./frontend
+    environment:
+      FASTAPI_INTERNAL_URL: http://backend:8000
+      MOCK_BACKEND: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   qubettera-postgres:
+  qubettera-models:
 

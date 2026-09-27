@@ -249,3 +249,14 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# Web application dependencies and generated files
+node_modules/
+.next/
+*.tsbuildinfo
+.env.local
+.env.*.local
+!frontend/lib/
+!frontend/lib/**
+# Original imported handoff retained locally; integrated code is in frontend/backend.
+/Frontend-Deployment-Production/

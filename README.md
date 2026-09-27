@@ -34,6 +34,70 @@ generation provider.
 
 ## Commands
 
+## Web application
+
+The merged application lives in `frontend/` (Next.js) and `backend/` (FastAPI).
+The backend imports `src/qubettera` directly and shares the CLI's root `.env`,
+`resources/`, `outputs/discussions/`, and `outputs/analytics/`.
+The original `Frontend-Deployment-Production/` handoff is retained locally as
+an ignored reference; its bundled legacy engines are not used.
+
+Install the web dependencies from the project root:
+
+```powershell
+python -m pip install -e ".[web,analytics,dev]"
+npm --prefix frontend ci
+```
+
+Run the backend and frontend in two terminals:
+
+```powershell
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+npm --prefix frontend run dev
+```
+
+Open http://localhost:3000. API documentation is at http://localhost:8000/docs.
+The frontend defaults to the local backend; optional settings are documented in
+`frontend/.env.example` (copy to `frontend/.env.local` if needed).
+Keep `MOCK_BACKEND=false` to use the integrated backend. Fake mode runs the real
+orchestrator with deterministic agents, saves history, and needs no model or DB;
+analytics deliberately rejects fake opinions. Live mode uses the same configured
+LLM, PostgreSQL retrieval, and analytics models as the CLI. Existing CLI reports
+can be opened through discussion history without recomputing them.
+
+For the containerized stack (root `.env` required):
+
+```powershell
+docker compose --profile web up --build -d
+```
+
+This starts PostgreSQL, the API, and the UI, with shared `data/` and `outputs/`
+folders and a persistent model cache. Populate the knowledge base using the RAG
+commands below. If an LLM runs on the host, use `host.docker.internal` instead
+of `localhost` in its URL. Plain `docker compose up -d` still starts only PostgreSQL.
+The web ports bind to localhost; remote hosting needs an authenticated reverse
+proxy with SSE buffering disabled and long request timeouts.
+
+Discussion events arrive after each completed turn, with keep-alive pings during
+generation. Analytics runs in a background thread; metrics appear together after
+the shared pipeline completes. Use one API worker: analytics task deduplication
+is process-local. Jobs survive browser disconnects, but not server restarts.
+`/health` checks liveness; `/health/ready` checks local code/resources, not external
+LLM, model download, or database availability.
+
+Verification:
+
+```powershell
+python -m pytest tests/test_web_integration.py
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
+
+## CLI commands
+
 ```powershell
 qubettera rag pipeline --skip-collection
 qubettera rag retrieve "mixture of experts routing" --top-k 5

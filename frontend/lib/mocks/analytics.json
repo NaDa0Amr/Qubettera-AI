@@ -1,0 +1,65 @@
+{
+  "discussion_id": "mock-discussion-001",
+  "proposition": "We should adopt sparse Mixture-of-Experts layers instead of dense feed-forward layers as the default architecture for our next 1B parameter transformer.",
+  "objective": "Explore architecture trade-offs for building a production-grade 1B parameter transformer under real-world constraints (1x A100 GPU, 3-month timeline).",
+  "topics": ["MoE vs Dense Layers", "SSM vs Attention", "Sliding Window vs Global Attention", "Hybrid Architectures"],
+  "agent_ids": ["dr_aris", "prof_elena", "hybrid_architect", "grad_student"],
+  "edges": [
+    ["dr_aris", "prof_elena"],
+    ["prof_elena", "dr_aris"],
+    ["dr_aris", "hybrid_architect"],
+    ["hybrid_architect", "dr_aris"],
+    ["prof_elena", "grad_student"],
+    ["grad_student", "prof_elena"],
+    ["hybrid_architect", "grad_student"],
+    ["grad_student", "hybrid_architect"]
+  ],
+  "rounds": 4,
+  "opinion_change": [
+    { "agent_id": "dr_aris", "round": 0, "stance": 0.72, "change": null, "reasoning": "Strong prior for MoE based on production experience." },
+    { "agent_id": "prof_elena", "round": 0, "stance": -0.55, "change": null, "reasoning": "Theoretical concerns about routing instability in sparse models." },
+    { "agent_id": "hybrid_architect", "round": 0, "stance": 0.10, "change": null, "reasoning": "Sees merit in both approaches, leans slightly toward hybrid." },
+    { "agent_id": "grad_student", "round": 0, "stance": 0.25, "change": null, "reasoning": "Excited by recent SSM papers, cautiously optimistic about MoE." },
+    { "agent_id": "dr_aris", "round": 1, "stance": 0.68, "change": -0.04, "reasoning": "Engaged with Elena's routing stability concern, partially conceded." },
+    { "agent_id": "prof_elena", "round": 1, "stance": -0.30, "change": 0.25, "reasoning": "Aris's production data on routing convergence was compelling." },
+    { "agent_id": "hybrid_architect", "round": 1, "stance": 0.20, "change": 0.10, "reasoning": "Hybrid framing gaining traction with the group." },
+    { "agent_id": "grad_student", "round": 1, "stance": 0.35, "change": 0.10, "reasoning": "Leo cited Mixtral paper evidence for MoE scalability." },
+    { "agent_id": "dr_aris", "round": 2, "stance": 0.60, "change": -0.08, "reasoning": "Accepted hardware constraint makes pure MoE harder to tune." },
+    { "agent_id": "prof_elena", "round": 2, "stance": 0.00, "change": 0.30, "reasoning": "Neutral after Samira's hybrid proposal addressed key concerns." },
+    { "agent_id": "hybrid_architect", "round": 2, "stance": 0.30, "change": 0.10, "reasoning": "Hybrid interleaving with 50% MoE layers proposed and accepted." },
+    { "agent_id": "grad_student", "round": 2, "stance": 0.40, "change": 0.05, "reasoning": "Consistent growth in confidence about MoE viability." },
+    { "agent_id": "dr_aris", "round": 3, "stance": 0.55, "change": -0.05, "reasoning": "Converged toward hybrid but maintains MoE preference." },
+    { "agent_id": "prof_elena", "round": 3, "stance": 0.15, "change": 0.15, "reasoning": "Moved to mild support for hybrid approach with dense fallback." },
+    { "agent_id": "hybrid_architect", "round": 3, "stance": 0.35, "change": 0.05, "reasoning": "Group converged on hybrid as pragmatic choice." },
+    { "agent_id": "grad_student", "round": 3, "stance": 0.45, "change": 0.05, "reasoning": "Final stance: enthusiastic about hybrid with SSM components." }
+  ],
+  "agreement": [
+    { "round": 0, "agreement": 0.28, "n_agents": 4 },
+    { "round": 1, "agreement": 0.45, "n_agents": 4 },
+    { "round": 2, "agreement": 0.62, "n_agents": 4 },
+    { "round": 3, "agreement": 0.74, "n_agents": 4 }
+  ],
+  "influence": [
+    { "agent_id": "dr_aris", "influence": 0.73, "condition_number": 12.4, "note": null },
+    { "agent_id": "prof_elena", "influence": 0.68, "condition_number": 15.2, "note": null },
+    { "agent_id": "hybrid_architect", "influence": 0.82, "condition_number": 9.1, "note": null },
+    { "agent_id": "grad_student", "influence": 0.41, "condition_number": 22.7, "note": null }
+  ],
+  "sentiment": [
+    { "message_id": "mock-001:0001", "agent_id": "dr_aris", "round": 0, "sentiment": 0.65, "label": "positive", "confidence": 0.91, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1423, "token_count": 312, "truncated": false, "note": null },
+    { "message_id": "mock-001:0002", "agent_id": "prof_elena", "round": 0, "sentiment": -0.42, "label": "negative", "confidence": 0.88, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1891, "token_count": 408, "truncated": false, "note": null },
+    { "message_id": "mock-001:0003", "agent_id": "hybrid_architect", "round": 0, "sentiment": 0.12, "label": "neutral", "confidence": 0.79, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1204, "token_count": 265, "truncated": false, "note": null },
+    { "message_id": "mock-001:0004", "agent_id": "grad_student", "round": 0, "sentiment": 0.38, "label": "positive", "confidence": 0.83, "method": "aieng-lab/codebert-base_sentiment", "text_length": 980, "token_count": 218, "truncated": false, "note": null },
+    { "message_id": "mock-001:0005", "agent_id": "dr_aris", "round": 1, "sentiment": 0.48, "label": "positive", "confidence": 0.87, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1650, "token_count": 362, "truncated": false, "note": null },
+    { "message_id": "mock-001:0006", "agent_id": "prof_elena", "round": 1, "sentiment": -0.15, "label": "neutral", "confidence": 0.76, "method": "aieng-lab/codebert-base_sentiment", "text_length": 2100, "token_count": 461, "truncated": false, "note": null },
+    { "message_id": "mock-001:0007", "agent_id": "hybrid_architect", "round": 1, "sentiment": 0.55, "label": "positive", "confidence": 0.92, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1380, "token_count": 302, "truncated": false, "note": null },
+    { "message_id": "mock-001:0008", "agent_id": "grad_student", "round": 1, "sentiment": 0.61, "label": "positive", "confidence": 0.89, "method": "aieng-lab/codebert-base_sentiment", "text_length": 1120, "token_count": 248, "truncated": false, "note": null }
+  ],
+  "metadata": {
+    "generated_at": "2026-09-21T20:36:02Z",
+    "stance_model": "gpt-4o-mini",
+    "sentiment_model": "aieng-lab/codebert-base_sentiment",
+    "stance_num_samples": 1,
+    "task1_from_cache": false
+  }
+}
