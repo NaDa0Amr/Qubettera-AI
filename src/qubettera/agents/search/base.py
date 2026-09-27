@@ -3,7 +3,8 @@ from typing import List, Dict, Any
 
 class SearchResult:
     """Normalized search result."""
-    def __init__(self, title: str, url: str, content: str, snippet: str = ""):
+    def __init__(self, title: str, url: str, content: str, snippet: str = "", score: float | None = None):
+        self.score = score
         self.title = title
         self.url = url
         self.content = content   # Full text or detailed content

@@ -21,7 +21,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from qubettera.agents.agent.checkpoint import get_checkpointer, open_postgres_checkpointer
 from qubettera.agents.agent.graph import build_graph
 from qubettera.agents.personas.loader import load_persona
-from qubettera.agents.utils.graph_utils import load_graph_config, validate_neighbor_opinions
+from qubettera.discussion.agent_graph import AgentGraph
+from qubettera.paths import CONFIGS_DIR
 
 
 def get_response(
@@ -55,10 +56,15 @@ def get_response(
 
     neighbors: dict[str, str] = {}
     if neighbor_opinions is not None:
-        config = load_graph_config(
-            topology_path or "personas/debate_graph.json"
-        )
-        neighbors = validate_neighbor_opinions(agent_id, neighbor_opinions, config)
+        topology = AgentGraph.from_json(topology_path or CONFIGS_DIR / "agent_graph.json")
+        if not isinstance(neighbor_opinions, dict):
+            raise ValueError("neighbor_opinions must be a dict.")
+        allowed = set(topology.senders(agent_id))
+        if set(neighbor_opinions) - allowed:
+            raise ValueError("neighbor_opinions contains non-adjacent agents.")
+        if any(not isinstance(value, str) or not value.strip() for value in neighbor_opinions.values()):
+            raise ValueError("neighbor_opinions has blank values.")
+        neighbors = dict(neighbor_opinions)
 
     persona = load_persona(agent_id)
     graph_input = {

@@ -16,6 +16,7 @@ unit-testable instead of leaving them as inline expressions:
 from __future__ import annotations
 
 from typing import Iterable
+from qubettera.agents.agent.budget import clip
 
 from .models import EvidenceItem, RoutedMessage, TurnRequest
 from .router import filter_delivered
@@ -40,7 +41,7 @@ def select_incoming_messages(
 def render_messages_block(messages: tuple[RoutedMessage, ...]) -> str:
     if not messages:
         return "- None"
-    return "\n".join(f"- {message.sender_id}: {message.content}" for message in messages)
+    return "\n".join((f"- {message.sender_id}: {clip(message.content, 6000)}" + ("\n  Validation warnings: " + "; ".join(message.warnings) if message.warnings else "")) for message in messages)
 
 
 def render_evidence_block(evidence: tuple[EvidenceItem, ...]) -> str:
@@ -64,10 +65,10 @@ def render_turn_prompt(request: TurnRequest) -> str:
         if request.phase == "initial"
         else f"This is discussion round {request.round_number}. Respond to the routed messages and evidence."
     )
-    previous = request.previous_opinion or "No previous opinion; this is the initial stage."
+    previous = clip(request.previous_opinion, 6000) or "No previous opinion; this is the initial stage."
     return (
         "You are an expert participant in a structured multi-agent discussion.\n\n"
-        f"{request.brief.render()}\n\n"
+        f"{clip(request.brief.render(), 6000)}\n\n"
         f"Stage instruction:\n{stage}\n\n"
         f"Your previous opinion:\n{previous}\n\n"
         "Messages delivered to you according to the communication graph:\n"
@@ -75,5 +76,5 @@ def render_turn_prompt(request: TurnRequest) -> str:
         f"Retrieval query for this turn:\n{request.retrieval_query or 'Not supplied'}\n\n"
         f"Retrieved evidence:\n{render_evidence_block(request.evidence)}\n\n"
         "Return your current recommendation with reasoning. Explicitly address relevant neighboring "
-        "claims. Cite the supplied or tool-retrieved sources for factual claims. Do not invent sources."
+        "claims. Cite current sources with exact [Source: URL] citations; history is not fresh evidence. Do not invent sources."
     )

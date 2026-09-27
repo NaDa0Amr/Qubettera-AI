@@ -27,6 +27,7 @@ dependencies = [
   "langgraph-checkpoint-postgres",
   "numpy>=1.26,<3",
   "playwright",
+  "psycopg[binary]>=3.2,<4",
   "psycopg2-binary>=2.9,<3",
   "PyMuPDF>=1.26,<2",
   "python-dotenv>=1,<2",

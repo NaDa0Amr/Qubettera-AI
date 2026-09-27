@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
@@ -52,6 +53,8 @@ IVFFLAT_PROBES = CONFIGURED_IVFFLAT_PROBES
 SOURCE_CANDIDATE_LIMIT = 2
 FINAL_SOURCE_LIMIT = 1
 _embed_model = None
+_embed_model_lock = threading.Lock()
+_query_encode_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 QueryExpander = Callable[[str, int], list[str]]
@@ -63,19 +66,22 @@ def get_connection():
 
 def _get_embed_model():
     global _embed_model
-    if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        try:
-            _embed_model = SentenceTransformer(
-                EMBEDDING_MODEL,
-                revision=EMBEDDING_MODEL_REVISION,
-                local_files_only=True,
-            )
-        except (OSError, ValueError):
-            _embed_model = SentenceTransformer(
-                EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION
-            )
-    return _embed_model
+    # Initial discussion turns start concurrently. Only one worker may load
+    # weights; publish the model only after construction completes successfully.
+    with _embed_model_lock:
+        if _embed_model is None:
+            from sentence_transformers import SentenceTransformer
+            try:
+                _embed_model = SentenceTransformer(
+                    EMBEDDING_MODEL,
+                    revision=EMBEDDING_MODEL_REVISION,
+                    local_files_only=True,
+                )
+            except (OSError, ValueError):
+                _embed_model = SentenceTransformer(
+                    EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION
+                )
+        return _embed_model
 
 
 def _encode_query(model, query: str):
@@ -87,7 +93,10 @@ def _encode_query(model, query: str):
     }
     if "query" in getattr(model, "prompts", {}):
         encode_kwargs["prompt_name"] = "query"
-    return model.encode(query, **encode_kwargs)
+    # Shared tokenizer/model state and device memory must not be used by
+    # simultaneous encode calls. Database queries and LLM calls stay parallel.
+    with _query_encode_lock:
+        return model.encode(query, **encode_kwargs)
 
 
 def _validate_query(query: str) -> str:

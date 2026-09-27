@@ -62,7 +62,8 @@ def get_chat_model(
             else "openrouter"
         )
     ).strip().lower()
-    model = model or os.getenv("LLM_MODEL")
+    # Resolve the model inside each provider branch. A local Ollama model ID
+    # in LLM_MODEL must not override a provider-specific WANDB_MODEL.
     temperature = _number_env("LLM_TEMPERATURE", "0.7", float)
 
     local_handler = callback_handler or AgentCallbackHandler(
@@ -86,7 +87,7 @@ def get_chat_model(
             raise RuntimeError(
                 "KAGGLE_LLM_URL is required for LLM_PROVIDER=kaggle."
             )
-        kaggle_model = model or os.getenv("KAGGLE_LLM_MODEL")
+        kaggle_model = model or os.getenv("KAGGLE_LLM_MODEL") or os.getenv("LLM_MODEL")
         if not kaggle_model:
             raise RuntimeError("KAGGLE_LLM_MODEL is required for LLM_PROVIDER=kaggle.")
         return ChatOllama(
@@ -107,7 +108,7 @@ def get_chat_model(
         if not api_key:
             raise RuntimeError("OPENROUTER_API_KEY is required for LLM_PROVIDER=openrouter.")
         return ChatOpenRouter(
-            model=model or "google/gemma-4-26b-a4b-it:free",
+            model=model or os.getenv("LLM_MODEL") or "google/gemma-4-26b-a4b-it:free",
             temperature=temperature,
             max_tokens=_number_env("OPENROUTER_MAX_TOKENS", "2048", int),
             timeout=_number_env("LLM_TIMEOUT_SECONDS", "60", int),
@@ -119,7 +120,7 @@ def get_chat_model(
         from langchain_ollama import ChatOllama
 
         return ChatOllama(
-            model=model or os.getenv("OLLAMA_MODEL", "gemma3:4b"),
+            model=model or os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL") or "gemma3:4b",
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             temperature=temperature,
             num_ctx=_number_env("OLLAMA_NUM_CTX", "4096", int),
@@ -151,14 +152,13 @@ def get_chat_model(
             raise RuntimeError("WANDB_API_KEY is required for LLM_PROVIDER=wandb.")
         base_url = os.getenv("WANDB_BASE_URL", "https://api.inference.wandb.ai/v1")
         project = os.getenv("WANDB_PROJECT")
-        default_headers = {"project": project} if project else None
+        default_headers = {"OpenAI-Project": project} if project else None
         return ChatOpenAI(
-            model=model or os.getenv("WANDB_MODEL") or os.getenv("LLM_MODEL") or "Qwen/Qwen3.6-35B-A3B",
+            model=model or os.getenv("WANDB_MODEL") or os.getenv("LLM_MODEL") or "Qwen/Qwen3-30B-A3B-Instruct-2507",
             api_key=api_key,
             base_url=base_url,
             temperature=temperature,
             max_tokens=_number_env("WANDB_MAX_TOKENS", os.getenv("OPENROUTER_MAX_TOKENS", "2048"), int),
-            reasoning_effort="none",
             default_headers=default_headers,
             callbacks=callbacks,
         )

@@ -1,7 +1,4 @@
-"""Durable PostgreSQL checkpointer with MemorySaver fallback.
-
-Ported from N/week2-agent/src/agent/checkpoint.py and adapted to be
-optional: if Postgres env vars are missing, falls back to in-memory.
+"""Explicit memory or durable PostgreSQL checkpoint configuration.
 
 Usage:
     with get_checkpointer() as checkpointer:
@@ -19,14 +16,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _REQUIRED_PG_VARS = ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD")
-
-
-def _postgres_available() -> bool:
-    """Use durable checkpoints only when explicitly enabled and configured."""
-    return (
-        os.environ.get("CHECKPOINT_BACKEND", "memory").strip().lower() == "postgres"
-        and all(os.environ.get(v) for v in _REQUIRED_PG_VARS)
-    )
 
 
 def _make_conninfo() -> str:
@@ -61,13 +50,19 @@ def open_postgres_checkpointer(conninfo: str | None = None) -> Iterator:
 
 @contextmanager
 def get_checkpointer() -> Iterator:
-    """Return the best available checkpointer.
+    """Open the explicitly selected checkpointer.
 
     Uses PostgresSaver only when ``CHECKPOINT_BACKEND=postgres`` and all
-    connection variables are present. RAG database configuration alone must
+    connection variables are present; missing variables raise an error. RAG settings must
     not silently change agent-memory behavior.
     """
-    if _postgres_available():
+    backend = os.environ.get("CHECKPOINT_BACKEND", "memory").strip().lower()
+    if backend not in {"memory", "postgres"}:
+        raise ValueError("CHECKPOINT_BACKEND must be memory or postgres.")
+    if backend == "postgres":
+        missing = [name for name in _REQUIRED_PG_VARS if not os.environ.get(name)]
+        if missing:
+            raise ValueError("PostgreSQL checkpoints require: " + ", ".join(missing))
         with open_postgres_checkpointer() as saver:
             yield saver
     else:

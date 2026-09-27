@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 class ScriptedModel:
     def __init__(self):
         self.invocations = []
-        self.responses = [AIMessage(content="initial answer"), AIMessage(content="round one answer")]
+        self.responses = [AIMessage(content="initial answer. No supporting evidence is available."), AIMessage(content="round one answer. No supporting evidence is available.")]
 
     def bind_tools(self, tools):
         return self
@@ -52,18 +52,18 @@ def test_adapter_uses_stable_agent_thread_and_injects_routed_context():
     )
     later = runtime.run_turn(make_request(1, (neighbor,), initial.opinion_text))
 
-    assert initial.response_text == "initial answer"
-    assert later.response_text == "round one answer"
+    assert initial.response_text == "initial answer. No supporting evidence is available."
+    assert later.response_text == "round one answer. No supporting evidence is available."
     assert initial.metadata["thread_id"] == "discussion-7:dr_aris"
     assert later.metadata["thread_id"] == "discussion-7:dr_aris"
-    second_prompt = model.invocations[-1][-1].content
+    second_prompt = next(m.content for m in reversed(model.invocations[-1]) if m.type == "human")
     assert "prof_elena: Dense layers are easier to stabilize." in second_prompt
     assert "initial answer" in second_prompt
 
 
 def test_supplied_rag_evidence_does_not_trigger_duplicate_retrieval():
     model = ScriptedModel()
-    model.responses = [AIMessage(content="grounded answer")]
+    model.responses = [AIMessage(content="grounded answer [Source: https://example.test/study]")]
     runtime = Week2AgentRuntime(model=model, tools=[])
     request = make_request(0)
     request = type(request)(
@@ -81,6 +81,6 @@ def test_supplied_rag_evidence_does_not_trigger_duplicate_retrieval():
 
     result = runtime.run_turn(request)
 
-    assert result.response_text == "grounded answer"
+    assert result.response_text == "grounded answer [Source: https://example.test/study]"
     assert len(model.invocations) == 1
     assert result.metadata["internal_retrieved_docs"] == 1

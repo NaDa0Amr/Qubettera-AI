@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from concurrent.futures import Future
 from typing import Any
 
 from qubettera.agents.personas.loader import PersonaConfigError, load_persona
@@ -18,8 +20,7 @@ from .models import EvidenceItem, TurnRequest
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
-_MAX_QUERY_CHARS = 1_800
-_MAX_COMPONENT_CHARS = 280
+_MAX_QUERY_CHARS = 512
 
 
 class TeamRetrievalProvider:
@@ -27,9 +28,8 @@ class TeamRetrievalProvider:
 
     One instance is shared across an entire discussion run. The orchestrator
     calls ``build_query``/``retrieve`` once per agent per turn (initial stage
-    included), so with 5 agents and 3 rounds this issues at least
-    ``5 * 3 = 15`` discussion-round retrieval calls, per the Task 5 acceptance
-    test.
+    included). A run-local cache shares successful results and in-flight
+    requests; backend failures never become cached empty evidence.
 
     The retrieval service is injectable for tests. Production uses the
     repository's ``PG*`` and embedding settings from ``.env``.
@@ -42,9 +42,13 @@ class TeamRetrievalProvider:
         retrieval_service: RetrievalService | None = None,
     ):
         self.top_k = top_k
+        self._lock = threading.Lock()
+        self._cache = {}
+        self._local = threading.local()
         adaptive_expansion = os.environ.get(
             "DISCUSSION_ADAPTIVE_EXPANSION", "false"
         ).strip().lower() in {"1", "true", "yes", "on"}
+        self.adaptive_expansion = adaptive_expansion
         self._service = retrieval_service or RetrievalService(
             adaptive_expand=adaptive_expansion
         )
@@ -65,61 +69,78 @@ class TeamRetrievalProvider:
         silently dropping the routed neighbor messages this method exists to
         surface.
         """
-        def _clip(text: str) -> str:
-            text = text.strip()
-            return text if len(text) <= _MAX_COMPONENT_CHARS else text[:_MAX_COMPONENT_CHARS].rsplit(" ", 1)[0] + "..."
-
-        parts: list[str] = [_clip(request.brief.objective)]
-        if request.brief.topics:
-            parts.append(_clip(request.brief.topics[0]))
-        if request.brief.constraints:
-            parts.append(_clip(request.brief.constraints[0]))
-
+        parts = [request.brief.objective]
         try:
-            persona = load_persona(request.agent_id)
-            if persona.retrieval_focus:
-                parts.append(_clip(persona.retrieval_focus))
+            focus = load_persona(request.agent_id).retrieval_focus
+            if focus:
+                parts.append(focus)
         except PersonaConfigError:
-            # No persona on disk for this agent ID (e.g. in a unit test) -
-            # fall back to whatever the brief and messages already provide.
             pass
-
         if request.previous_opinion:
-            parts.append(_clip(request.previous_opinion))
+            parts.append(request.previous_opinion)
+        parts.extend(f"{m.sender_id}: {m.opinion or m.content}" for m in request.incoming_messages)
+        parts.extend(request.brief.topics[:1])
+        parts.extend(request.brief.constraints[:1])
+        parts = [" ".join(part.split()) for part in parts if part.strip()]
+        # Fair allocation prevents a long brief or previous opinion displacing focus/claims.
+        remaining = _MAX_QUERY_CHARS - 3 * (len(parts) - 1)
+        if remaining < len(parts):
+            parts = parts[:32]
+            remaining = _MAX_QUERY_CHARS - 3 * (len(parts) - 1)
+        allocations = [0] * len(parts)
+        while remaining and any(allocations[i] < len(part) for i, part in enumerate(parts)):
+            for i, part in enumerate(parts):
+                if remaining and allocations[i] < len(part):
+                    allocations[i] += 1
+                    remaining -= 1
+        return " | ".join(part[:size] for part, size in zip(parts, allocations))
 
-        for message in request.incoming_messages:
-            claim = (message.opinion or message.content).strip()
-            if claim:
-                parts.append(f"{message.sender_id}: {_clip(claim)}")
+    def begin_run(self):
+        with self._lock:
+            self._cache.clear()
 
-        query = " | ".join(part for part in parts if part)
-        return query[:_MAX_QUERY_CHARS]
+    def end_run(self):
+        self.begin_run()
+
+    def take_warnings(self):
+        warnings = getattr(self._local, "warnings", ())
+        self._local.warnings = ()
+        return warnings
 
     def retrieve(self, query: str, request: TurnRequest) -> tuple[EvidenceItem, ...]:
-        if not query.strip():
+        self._local.warnings = ()
+        normalized = " ".join(query.split())
+        if not normalized:
             return ()
+        key = (normalized.casefold(), self.top_k, self.adaptive_expansion)
+        with self._lock:
+            future = self._cache.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._cache[key] = future
+        if owner:
+            try:
+                rows = self._service.retrieve(normalized, top_k=self.top_k)
+                future.set_result(tuple(self._to_evidence(item) for item in rows))
+            except Exception as exc:
+                future.set_exception(exc)
+                with self._lock:
+                    self._cache.pop(key, None)
         try:
-            results = self._service.retrieve(query, top_k=self.top_k)
-        except (RuntimeError, ValueError) as exc:
-            # A retrieval outage should not take down the whole discussion; the
-            # agent still gets its persona, previous opinion, and routed
-            # messages, just no fresh evidence for this one turn.
-            logger.warning(
-                "discussion %s round %s agent %s: retrieval unavailable (%s)",
-                request.discussion_id,
-                request.round_number,
-                request.agent_id,
-                exc,
-            )
+            return future.result()
+        except Exception as exc:
+            warning = f"Retrieval unavailable ({type(exc).__name__}); no fresh internal evidence."
+            self._local.warnings = (warning,)
+            logger.warning("discussion %s agent %s: %s", request.discussion_id, request.agent_id, warning,
+                           exc_info=True)
             return ()
-
-        return tuple(self._to_evidence(item) for item in results)
 
     @staticmethod
     def _to_evidence(document: dict[str, Any]) -> EvidenceItem:
-        known = {"text", "title", "url", "source_url", "score", "distance"}
+        known = {"text", "title", "url", "source_url", "score"}
         metadata = {key: value for key, value in document.items() if key not in known}
-        raw_score = document.get("distance", document.get("score"))
+        raw_score = document.get("score")
         try:
             score = float(raw_score) if raw_score is not None else None
         except (TypeError, ValueError):

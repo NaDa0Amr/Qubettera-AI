@@ -36,6 +36,13 @@ def route_message(message: RoutedMessage, graph: AgentGraph) -> RoutedMessage:
     return replace(message, recipient_ids=get_recipients(message.sender_id, graph))
 
 
+def broadcast_message(message: RoutedMessage, participants: tuple[str, ...]) -> RoutedMessage:
+    """Moderator delivery is explicit and independent of participant edges."""
+    if message.phase != "synthesis" or message.sender_id != "moderator":
+        raise ValueError("Only the moderator synthesis can use broadcast delivery.")
+    return replace(message, recipient_ids=participants)
+
+
 def filter_delivered(
     messages: tuple[RoutedMessage, ...],
     recipient_id: str,

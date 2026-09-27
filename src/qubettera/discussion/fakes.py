@@ -19,6 +19,10 @@ class DeterministicAgentRuntime:
             f"{request.agent_id} {request.phase} round {request.round_number}; "
             f"received: {context}."
         )
+        if request.evidence:
+            response += f" [Source: {request.evidence[0].url}]"
+        else:
+            response += " No supporting evidence is available."
         return AgentTurnResult(response_text=response, opinion_text=response)
 
 

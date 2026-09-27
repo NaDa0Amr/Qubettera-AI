@@ -48,6 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--discussion", default=str(CONFIGS_DIR / "discussion.json"))
     run.add_argument("--output-dir", default=str(OUTPUTS_DIR / "discussions"))
     run.add_argument("--no-retrieval", action="store_true")
+    run.add_argument("--max-workers", type=int, default=None,
+                     help="Parallel agents per round (Kaggle default: 1; W&B/fake default: 5).")
 
     commands.add_parser("doctor")
     return parser
@@ -70,39 +72,46 @@ def _run_pipeline(skip_collection: bool) -> None:
 
 
 def _run_discussion(args: argparse.Namespace) -> int:
-    from uuid import uuid4
+    from contextlib import ExitStack
 
-    from qubettera.discussion.agent_graph import AgentGraph
-    from qubettera.discussion.config import load_discussion_config
-    from qubettera.discussion.fakes import DeterministicAgentRuntime, DeterministicRetrievalProvider
-    from qubettera.discussion.interfaces import NoRetrievalProvider
-    from qubettera.discussion.orchestrator import DiscussionOrchestrator
-    from qubettera.discussion.run_log import JsonlEventSink
+    with ExitStack() as stack:
+        import os
+        from uuid import uuid4
 
-    config = load_discussion_config(args.discussion)
-    graph = AgentGraph.from_json(args.graph)
-    discussion_id = str(uuid4())
-    runtime = DeterministicAgentRuntime()
-    retrieval_provider = DeterministicRetrievalProvider()
-    if args.mode == "live":
-        from qubettera.discussion.retrieval_provider import TeamRetrievalProvider
-        from qubettera.discussion.week2_adapter import Week2AgentRuntime
+        from qubettera.discussion.agent_graph import AgentGraph
+        from qubettera.discussion.config import load_discussion_config
+        from qubettera.discussion.fakes import DeterministicAgentRuntime, DeterministicRetrievalProvider
+        from qubettera.discussion.interfaces import NoRetrievalProvider
+        from qubettera.discussion.orchestrator import DiscussionOrchestrator
+        from qubettera.discussion.run_log import JsonlEventSink
 
-        runtime = Week2AgentRuntime()
-        retrieval_provider = TeamRetrievalProvider()
-    if args.no_retrieval:
-        retrieval_provider = NoRetrievalProvider()
-    output = Path(args.output_dir) / f"{discussion_id}.jsonl"
-    result = DiscussionOrchestrator(
-        graph=graph,
-        agent_runtime=runtime,
-        retrieval_provider=retrieval_provider,
-        event_sink=JsonlEventSink(output),
-        id_factory=lambda: discussion_id,
-    ).run(config)
-    print(f"Discussion {result.discussion_id}: {result.status} ({len(result.messages)} messages)")
-    print(f"Event log: {output}")
-    return 0
+        config = load_discussion_config(args.discussion)
+        graph = AgentGraph.from_json(args.graph)
+        discussion_id = str(uuid4())
+        runtime = DeterministicAgentRuntime()
+        retrieval_provider = DeterministicRetrievalProvider()
+        if args.mode == "live":
+            from qubettera.discussion.retrieval_provider import TeamRetrievalProvider
+            from qubettera.discussion.week2_adapter import Week2AgentRuntime
+
+            runtime = stack.enter_context(Week2AgentRuntime())
+            retrieval_provider = TeamRetrievalProvider()
+        if args.no_retrieval:
+            retrieval_provider = NoRetrievalProvider()
+        output = Path(args.output_dir) / f"{discussion_id}.jsonl"
+        result = DiscussionOrchestrator(
+            graph=graph,
+            agent_runtime=runtime,
+            retrieval_provider=retrieval_provider,
+            event_sink=JsonlEventSink(output),
+            id_factory=lambda: discussion_id,
+            max_workers=(args.max_workers if args.max_workers is not None else
+                         1 if args.mode == "live" and os.getenv("LLM_PROVIDER", "").lower() in {"kaggle", "kaggle-ollama", "ollama"}
+                         else None),
+        ).run(config)
+        print(f"Discussion {result.discussion_id}: {result.status} ({len(result.messages)} messages)")
+        print(f"Event log: {output}")
+        return 0
 
 
 def _doctor() -> int:

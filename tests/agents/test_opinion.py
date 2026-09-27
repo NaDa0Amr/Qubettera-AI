@@ -111,3 +111,16 @@ def test_opinion_prompt_changes_stance_and_emphasis_by_persona():
     assert dense["stance"] in dense_prompt
     assert "quality per active parameter" in moe_prompt
     assert "training stability and reproducibility" in dense_prompt
+def test_public_opinion_cli_is_preserved(monkeypatch, capsys):
+    from qubettera.cli import main
+    from qubettera.agents.pipelines import opinion
+    calls = []
+
+    def generate(persona, topic):
+        calls.append((persona, topic))
+        return {"opinion_text": "Public opinion result"}
+
+    monkeypatch.setattr(opinion, "generate_opinion", generate)
+    assert main(["agent", "opinion", "dr_aris", "Architecture"]) == 0
+    assert calls == [("dr_aris", "Architecture")]
+    assert "Public opinion result" in capsys.readouterr().out

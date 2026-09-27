@@ -1,37 +1,23 @@
-from __future__ import annotations
-
-import unittest
-
-from qubettera.agents.personas import PersonaConfig
-from qubettera.agents.prompts import build_system_prompt
-
-TEST_PERSONA = PersonaConfig(
-    persona_id="test_persona",
-    name="Test Persona",
-    background="background",
-    stance="stance",
-    communication_style="style",
-)
+"""Prompt behavior migrated to the active Jinja template."""
+from qubettera.agents.personas import load_persona
+from qubettera.agents.utils.prompt_loader import load_prompt
 
 
-class TestToolAvailabilityMatchesPrompt(unittest.TestCase):
-    def test_no_tools_prompt_does_not_mention_search_knowledge_base(self) -> None:
-        prompt = build_system_prompt(TEST_PERSONA, tools_available=False)
-        self.assertNotIn("search_knowledge_base", prompt)
-        self.assertIn("No tools are available", prompt)
-
-    def test_tools_available_prompt_mentions_search_knowledge_base(self) -> None:
-        prompt = build_system_prompt(TEST_PERSONA, tools_available=True)
-        self.assertIn("search_knowledge_base", prompt)
-
-    def test_default_is_tools_available_true(self) -> None:
-        """generate_opinion() relies on the default matching its own
-        tools=schemas call -- if this default ever flips, that call site
-        must be updated to pass tools_available explicitly."""
-        default_prompt = build_system_prompt(TEST_PERSONA)
-        explicit_prompt = build_system_prompt(TEST_PERSONA, tools_available=True)
-        self.assertEqual(default_prompt, explicit_prompt)
+def render(**kwargs):
+    return load_prompt("system.jinja", persona=load_persona("dr_aris"), task="Choose architecture",
+                       neighbor_opinions={}, tools_available=True, **kwargs)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_discussion_prompt_assigns_internal_retrieval_to_orchestrator():
+    prompt = render(discussion_mode=True, synthesis_mode=False)
+    assert "Never call internal retrieval tools" in prompt
+    assert "External web tools are optional fallback" in prompt
+    assert "MUST first execute" not in prompt
+
+
+def test_exhausted_tool_budget_requires_direct_answer():
+    assert "No tools remain this turn" in render(discussion_mode=True, synthesis_mode=True)
+
+
+def test_standalone_agent_retains_retrieval_instruction():
+    assert "knowledge_retrieval" in render(discussion_mode=False, synthesis_mode=False)

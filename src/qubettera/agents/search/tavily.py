@@ -37,6 +37,13 @@ class TavilyProvider(SearchProvider):
         return requests.Session()
 
     def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+        if not isinstance(query, str):
+            raise TypeError("query must be a string")
+        query = " ".join(query.split())
+        if not query or len(query) > 2000:
+            raise ValueError("query must contain 1 to 2000 characters")
+        if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 10:
+            raise ValueError("max_results must be between 1 and 10")
         api_key = os.getenv("TAVILY_API_KEY", "").strip() or None
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
@@ -70,12 +77,17 @@ class TavilyProvider(SearchProvider):
             logger.warning(msg)
             raise WebSearchExecutionError(msg) from exc
 
+        if not isinstance(data, dict) or not isinstance(data.get("results", []), list):
+            raise WebSearchExecutionError("Tavily returned an invalid results collection.")
         results: List[SearchResult] = []
         for item in data.get("results", [])[:max_results]:
             if not isinstance(item, dict):
                 continue
             url = item.get("url", "")
+            if not isinstance(url, str) or not url.strip():
+                continue
             title = item.get("title") or url
             content = item.get("content", "")
-            results.append(SearchResult(title=title, url=url, content=content, snippet=content[:200]))
+            results.append(SearchResult(title=title, url=url, content=content, snippet=content[:200],
+                score=float(item["score"]) if isinstance(item.get("score"), (int, float)) else None))
         return results

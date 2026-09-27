@@ -37,12 +37,18 @@ def test_three_round_run_logs_one_output_per_agent_per_round(tmp_path):
     assert result.status == "completed"
     assert len(initial_messages) == 5
     assert len(discussion_messages) == 15
-    assert len(runtime.requests) == 20
+    assert len(runtime.requests) == 21
     for round_number in (1, 2, 3):
         assert sum(m.round_number == round_number for m in discussion_messages) == 5
-    assert sum(event["event"] == "turn_completed" for event in log_events) == 20
+    assert sum(event["event"] == "turn_completed" for event in log_events) == 21
     assert log_events[0]["event"] == "discussion_started"
     assert log_events[-1]["event"] == "discussion_completed"
+    assert len(result.messages) == 21
+    synthesis = result.messages[-1]
+    assert synthesis.phase == "synthesis"
+    assert synthesis.sender_id == "moderator"
+    assert synthesis.recipient_ids == config.participant_ids
+    assert all(m.round_number == 3 and m.phase == "discussion" for m in runtime.requests[-1].incoming_messages)
 
 
 def test_next_round_uses_only_routed_previous_snapshot(tmp_path):
@@ -128,7 +134,37 @@ def test_parallel_stages_keep_deterministic_message_order(tmp_path):
     result = orchestrator.run(load_discussion_config("resources/configs/discussion.json"))
 
     assert len(runtime.thread_names) > 1
-    assert [message.sequence_number for message in result.messages] == list(range(1, 21))
+    assert [message.sequence_number for message in result.messages] == list(range(1, 22))
     assert [message.sender_id for message in result.messages[:5]] == list(
         result.config.participant_ids
     )
+
+
+def test_warnings_reach_neighbors_moderator_and_log(tmp_path):
+    from qubettera.discussion.models import AgentTurnResult
+
+    class UncitedRuntime(DeterministicAgentRuntime):
+        def run_turn(self, request):
+            self.requests.append(request)
+            return AgentTurnResult(response_text="Unsupported recommendation", opinion_text="Unsupported")
+
+    runtime = UncitedRuntime()
+    orchestrator, _, path = build_orchestrator(tmp_path, runtime)
+    result = orchestrator.run(load_discussion_config("resources/configs/discussion.json"))
+    assert all(m.warnings and "Validation warning" in m.content for m in result.messages)
+    assert all(m.warnings for request in runtime.requests[5:] for m in request.incoming_messages)
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    assert all(e["message"]["warnings"] for e in events if e["event"] == "turn_completed")
+
+
+def test_synthesis_failure_preserves_twenty_participant_messages(tmp_path):
+    class Runtime(DeterministicAgentRuntime):
+        def run_turn(self, request):
+            if request.phase == "synthesis":
+                raise RuntimeError("moderator failed")
+            return super().run_turn(request)
+
+    orchestrator, _, _ = build_orchestrator(tmp_path, Runtime())
+    with pytest.raises(DiscussionExecutionError) as captured:
+        orchestrator.run(load_discussion_config("resources/configs/discussion.json"))
+    assert len(captured.value.partial_result.messages) == 20

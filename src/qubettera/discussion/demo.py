@@ -74,6 +74,8 @@ class ConsoleTurnStream:
         sender = self._persona_names.get(sender_id, sender_id)
         if message["phase"] == "initial":
             stage = "opening"
+        elif message["phase"] == "synthesis":
+            stage = "synthesis"
         else:
             stage = f"round {message['round_number']}"
         recipients = ", ".join(message["recipient_ids"]) or "(nobody)"
@@ -135,70 +137,73 @@ def _build_graph(args: argparse.Namespace, participant_ids: tuple[str, ...]) -> 
 
 
 def main() -> int:
-    args = parse_args()
-    config = load_discussion_config(args.discussion)
+    from contextlib import ExitStack
 
-    if args.mode == "live":
-        from .week2_adapter import Week2AgentRuntime
+    with ExitStack() as stack:
+        args = parse_args()
+        config = load_discussion_config(args.discussion)
 
-        runtime = Week2AgentRuntime(tools=[] if args.no_agent_tools else None)
-    else:
-        runtime = DeterministicAgentRuntime()
+        if args.mode == "live":
+            from .week2_adapter import Week2AgentRuntime
 
-    if args.no_retrieval:
-        retrieval_provider = NoRetrievalProvider()
-    elif args.mode == "live":
-        from .retrieval_provider import TeamRetrievalProvider
+            runtime = stack.enter_context(Week2AgentRuntime(tools=[] if args.no_agent_tools else None))
+        else:
+            runtime = DeterministicAgentRuntime()
 
-        retrieval_provider = TeamRetrievalProvider()
-    else:
-        retrieval_provider = DeterministicRetrievalProvider()
+        if args.no_retrieval:
+            retrieval_provider = NoRetrievalProvider()
+        elif args.mode == "live":
+            from .retrieval_provider import TeamRetrievalProvider
 
-    graph = _build_graph(args, config.participant_ids)
-    persona_names = _persona_names(config.participant_ids)
-    discussion_id = str(uuid4())
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    num_agents = len(config.participant_ids)
-    output_filename = f"demo-{args.mode}-{args.topology}-{num_agents}agents-{timestamp}.jsonl"
-    output_path = Path(args.output_dir) / output_filename
+            retrieval_provider = TeamRetrievalProvider()
+        else:
+            retrieval_provider = DeterministicRetrievalProvider()
 
-    orchestrator = DiscussionOrchestrator(
-        graph=graph,
-        agent_runtime=runtime,
-        retrieval_provider=retrieval_provider,
-        event_sink=ConsoleTurnStream(JsonlEventSink(output_path), persona_names),
-        id_factory=lambda: discussion_id,
-        max_workers=len(config.participant_ids) if args.parallel else 1,
-    )
+        graph = _build_graph(args, config.participant_ids)
+        persona_names = _persona_names(config.participant_ids)
+        discussion_id = str(uuid4())
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        num_agents = len(config.participant_ids)
+        output_filename = f"demo-{args.mode}-{args.topology}-{num_agents}agents-{timestamp}.jsonl"
+        output_path = Path(args.output_dir) / output_filename
 
-    participants = ", ".join(
-        f"{persona_names[agent_id]} ({agent_id})" for agent_id in config.participant_ids
-    )
-    print(f"\n{'=' * 60}")
-    print(f"Objective: {config.brief.objective}")
-    print(f"Participants: {participants}")
-    print(f"Mode: {args.mode} | Topology: {args.topology} | Rounds: {config.num_rounds}")
-    print(f"{'=' * 60}")
-    print(f"\n{graph.render_ascii()}\n")
+        orchestrator = DiscussionOrchestrator(
+            graph=graph,
+            agent_runtime=runtime,
+            retrieval_provider=retrieval_provider,
+            event_sink=ConsoleTurnStream(JsonlEventSink(output_path), persona_names),
+            id_factory=lambda: discussion_id,
+            max_workers=len(config.participant_ids) if args.parallel else 1,
+        )
 
-    result = orchestrator.run(config)
-    discussion_turns = [message for message in result.messages if message.phase == "discussion"]
-    retrieval_events = [
-        message for message in result.messages if message.phase == "discussion" and message.retrieval_query
-    ]
+        participants = ", ".join(
+            f"{persona_names[agent_id]} ({agent_id})" for agent_id in config.participant_ids
+        )
+        print(f"\n{'=' * 60}")
+        print(f"Objective: {config.brief.objective}")
+        print(f"Participants: {participants}")
+        print(f"Mode: {args.mode} | Topology: {args.topology} | Rounds: {config.num_rounds}")
+        print(f"{'=' * 60}")
+        print(f"\n{graph.render_ascii()}\n")
 
-    print("\n" + "=" * 60)
-    print(f"Discussion ID: {result.discussion_id}")
-    print(f"Status: {result.status}")
-    print(f"Topology: {args.topology}")
-    print(f"Directed graph strongly connected: {graph.is_strongly_connected()}")
-    print(f"Participants: {len(config.participant_ids)}")
-    print(f"Discussion rounds: {config.num_rounds}")
-    print(f"Initial opinions: {len(config.participant_ids)}")
-    print(f"Discussion turns: {len(discussion_turns)}")
-    print(f"Discussion-round retrieval events: {len(retrieval_events)}")
-    print(f"Event log: {output_path}")
-    return 0
+        result = orchestrator.run(config)
+        discussion_turns = [message for message in result.messages if message.phase == "discussion"]
+        retrieval_events = [
+            message for message in result.messages if message.phase == "discussion" and message.retrieval_query
+        ]
+
+        print("\n" + "=" * 60)
+        print(f"Discussion ID: {result.discussion_id}")
+        print(f"Status: {result.status}")
+        print(f"Topology: {args.topology}")
+        print(f"Directed graph strongly connected: {graph.is_strongly_connected()}")
+        print(f"Participants: {len(config.participant_ids)}")
+        print(f"Discussion rounds: {config.num_rounds}")
+        print(f"Initial opinions: {len(config.participant_ids)}")
+        print(f"Discussion turns: {len(discussion_turns)}")
+        print(f"Discussion-round retrieval events: {len(retrieval_events)}")
+        print(f"Event log: {output_path}")
+        return 0
 
 
 if __name__ == "__main__":

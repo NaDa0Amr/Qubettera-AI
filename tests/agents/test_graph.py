@@ -84,11 +84,11 @@ def test_same_thread_accumulates_messages_with_checkpointer():
     assert human_messages == ["first question", "second question"]
 
 
-def test_sixth_turn_generates_summary_and_prompts_with_recent_window():
+def test_large_history_generates_summary_and_prompts_with_recent_window():
     history = []
     for index in range(6):
         history.extend(
-            [HumanMessage(content=f"question {index}"), AIMessage(content=f"answer {index}")]
+            [HumanMessage(content=f"question {index}"), AIMessage(content=f"answer {index}" + " long history" * 250)]
         )
     model = ScriptedModel(
         [

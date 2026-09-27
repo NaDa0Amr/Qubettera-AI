@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 
 from qubettera.agents.personas import PersonaConfigError, load_all_personas, load_persona
-from qubettera.agents.prompts import build_system_prompt
+from qubettera.agents.utils.prompt_loader import load_prompt
+
+
+def build_system_prompt(persona):
+    return load_prompt("system.jinja", persona=persona, task="", neighbor_opinions={},
+                       discussion_mode=True, synthesis_mode=False)
 from qubettera.paths import PERSONAS_DIR
 
 

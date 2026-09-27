@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-Phase = Literal["initial", "discussion"]
+Phase = Literal["initial", "discussion", "synthesis"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,7 @@ class RoutedMessage:
     retrieval_query: str = ""
     evidence: tuple[EvidenceItem, ...] = ()
     created_at: str = ""
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

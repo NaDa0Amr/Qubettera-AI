@@ -3,6 +3,8 @@ from contextlib import nullcontext
 from langchain_core.messages import AIMessage
 
 from qubettera.agents import handoff
+import json
+import pytest
 
 
 class FakeGraph:
@@ -26,4 +28,18 @@ def test_handoff_hides_graph_state_and_loads_requested_persona(monkeypatch):
     assert result == "handoff response"
     assert fake_graph.config == {"configurable": {"thread_id": "dense-thread"}}
     assert "routing instability" in fake_graph.graph_input["persona"]["retrieval_focus"]
+
+
+def test_neighbor_validation_uses_directed_incoming_edges(monkeypatch, tmp_path):
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps({"nodes": ["dr_aris", "prof_elena", "grad_student"],
+        "edges": [["dr_aris", "prof_elena"], ["prof_elena", "grad_student"], ["grad_student", "dr_aris"]]}))
+    fake = FakeGraph()
+    monkeypatch.setattr(handoff, "get_checkpointer", lambda: nullcontext(object()))
+    monkeypatch.setattr(handoff, "build_graph", lambda checkpointer: fake)
+    handoff.get_response("dr_aris", "thread", "Question", topology_path=path,
+                         neighbor_opinions={"grad_student": "Allowed"})
+    with pytest.raises(ValueError, match="non-adjacent"):
+        handoff.get_response("dr_aris", "thread", "Question", topology_path=path,
+                             neighbor_opinions={"prof_elena": "Wrong direction"})
 

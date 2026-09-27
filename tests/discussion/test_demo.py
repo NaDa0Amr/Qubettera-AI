@@ -38,4 +38,4 @@ def test_fake_mode_logs_events_while_streaming(monkeypatch, capsys, tmp_path):
     events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     assert events[0]["event"] == "discussion_started"
     assert events[-1]["event"] == "discussion_completed"
-    assert sum(event["event"] == "turn_completed" for event in events) == 20
+    assert sum(event["event"] == "turn_completed" for event in events) == 21

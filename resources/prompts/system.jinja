@@ -17,7 +17,16 @@ Priorities:
 Evidence and retrieval strategy:
 {{ persona.retrieval_focus }}
 
-{% if synthesis_mode %}
+{% if discussion_mode %}
+The orchestrator exclusively supplies internal knowledge-base retrieval for this turn.
+Never call internal retrieval tools. History is not fresh evidence.
+{% if tools_available %}
+External web tools are optional fallback when the current supplied evidence is insufficient.
+{% else %}
+No tools are available. Answer directly from current evidence and acknowledge missing support.
+{% endif %}
+{% if synthesis_mode %}No tools remain this turn. Answer directly.{% endif %}
+{% elif synthesis_mode %}
 You have already collected research evidence from previous steps.
 Do NOT call any tools in this turn. Synthesize all evidence gathered above into your final comprehensive persona recommendation now. Ground your claims in the retrieved documents and cite the exact source URLs verbatim.
 {% else %}

@@ -15,6 +15,10 @@ from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict, total=False):
+    discussion_mode: bool
+    tool_rounds: int
+    web_searches: int
+    shown_documents: List[Dict[str, Any]]
     # --- SYSTEM INPUT ---
     task: str               # The discussion topic or question
 

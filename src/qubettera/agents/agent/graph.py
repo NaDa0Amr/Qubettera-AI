@@ -18,10 +18,10 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from qubettera.agents.agent.state import AgentState
+from qubettera.agents.agent.budget import InputBudget, clip
 from qubettera.agents.llm.factory import _rate_limit_wait_seconds, get_chat_model
 from qubettera.agents.tools.retrieval_tool import knowledge_retrieval, retrieve_knowledge_base
 from qubettera.agents.tools.search_tool import live_web_search
@@ -104,7 +104,8 @@ def build_graph(
     registry = {t.name: t for t in active_tools}
     if len(registry) != len(active_tools):
         raise ValueError("Tool names must be unique.")
-    model_with_tools = base_model.bind_tools(list(registry.values()))
+    model_with_tools = base_model.bind_tools(list(registry.values())) if active_tools else base_model
+    budget = InputBudget(base_model)
 
     # ------------------------------------------------------------------ #
     # manage_memory node                                                   #
@@ -115,10 +116,15 @@ def build_graph(
         cutoff = trim_start(messages)
         summarized_count = state.get("summarized_message_count", 0)
 
-        if cutoff <= summarized_count:
+        if budget.size(messages) <= budget.limit // 2:
             return {}  # nothing new to summarise
 
-        prior_summary = state.get("memory_summary", "")
+        if cutoff <= summarized_count:
+            humans = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
+            cutoff = humans[-1] if len(humans) > 1 else 0
+        if cutoff <= summarized_count:
+            return {}
+        prior_summary = clip(state.get("memory_summary", ""), 2000)
         new_old_messages = messages[summarized_count:cutoff]
 
         summary_prompt = (
@@ -128,7 +134,7 @@ def build_graph(
             f"New messages to fold in:\n{_transcript(new_old_messages)}"
         )
         try:
-            response = base_model.invoke(
+            response = budget.invoke(base_model,
                 [
                     SystemMessage(content="You maintain faithful, compact conversation memory."),
                     HumanMessage(content=summary_prompt),
@@ -138,11 +144,11 @@ def build_graph(
             if not summary_text:
                 return {}
             return {
-                "memory_summary": summary_text,
+                "memory_summary": clip(summary_text, 2000),
                 "summarized_message_count": cutoff,
             }
         except Exception as exc:
-            logger.warning("memory summary failed (%s); keeping full history.", exc)
+            logger.warning("memory summary failed (%s); using bounded recent history.", exc)
             return {}
 
     # ------------------------------------------------------------------ #
@@ -154,6 +160,7 @@ def build_graph(
             raise ValueError("AgentState requires a persona before call_model.")
 
         messages = state.get("messages", [])
+        task = state.get("task", "")
         cutoff = trim_start(messages)
         summarized_count = state.get("summarized_message_count", 0)
 
@@ -173,7 +180,7 @@ def build_graph(
         memory_summary = state.get("memory_summary", "")
 
         # Count tool turns to prevent runaway loops and token accumulation
-        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage) or getattr(m, "type", "") == "tool")
+        tool_count = state.get("tool_rounds", 0)
         max_tool_rounds = int(os.getenv("MAX_TOOL_ROUNDS", "1"))
         synthesis_mode = tool_count >= max_tool_rounds
 
@@ -184,33 +191,68 @@ def build_graph(
             neighbor_opinions=neighbor_opinions,
             memory_summary=memory_summary,
             synthesis_mode=synthesis_mode,
+            discussion_mode=state.get("discussion_mode", False),
+            tools_available=bool(active_tools),
         )
 
-        active_model = model_with_tools
+        active_model = base_model if synthesis_mode else model_with_tools
+        shown = []
+        protected = []
+        if state.get("discussion_mode"):
+            from qubettera.discussion.citations import RULES
+            from qubettera.discussion.context import render_evidence_block
+            from qubettera.discussion.models import EvidenceItem
+            evidence_text = ""
+            # Leave one slot for web fallback when external tools are available.
+            internal_limit = 4 if active_tools else 5
+            for document in [*state.get("retrieved_docs", [])[:internal_limit], *state.get("web_documents", [])]:
+                if len(shown) >= 5:
+                    break
+                item = {**document, "text": clip(str(document.get("text", "")), 1200),
+                        "title": clip(str(document.get("title", "")), 200)}
+                block = render_evidence_block((EvidenceItem(text=item["text"], title=item["title"],
+                    url=str(item.get("url") or item.get("source_url") or "")),))
+                if len((evidence_text + block).encode("utf-8")) > budget.limit // 3:
+                    continue
+                evidence_text += block + "\n"
+                shown.append(item)
+            protected = [SystemMessage(content=RULES + "\nCurrent evidence only:\n" +
+                (evidence_text or "No supporting evidence is available."))]
+
+        def invoke(target, prompt):
+            schemas = active_tools if target is model_with_tools and not synthesis_mode else ()
+            return budget.invoke(target, prompt, schemas, protected=protected)
 
         try:
-            response = active_model.invoke(
+            response = invoke(active_model,
                 [SystemMessage(content=system_prompt), *prompt_messages]
             )
         except Exception as exc:
+            from httpx import ConnectError, TimeoutException
+
+            if isinstance(exc, (ConnectError, TimeoutException)) or "ERR_NGROK_3200" in str(exc):
+                raise RuntimeError(
+                    "Generation model connection failed or timed out. Check the model endpoint "
+                    "and LLM_TIMEOUT_SECONDS; live discussions use one worker by default."
+                ) from exc
             wait = _rate_limit_wait_seconds(str(exc))
             if wait and wait > 0:
                 logger.warning("Groq rate limit reached; sleeping %.1fs and retrying...", wait)
                 time.sleep(wait)
                 try:
-                    response = active_model.invoke(
+                    response = invoke(active_model,
                         [SystemMessage(content=system_prompt), *prompt_messages]
                     )
                 except Exception as retry_exc:
                     logger.warning("Retry with tools failed (%s); answering directly.", retry_exc)
                     no_tools_prompt = system_prompt + "\n\nCRITICAL: Answer directly in plain text. Do NOT call any tools."
-                    response = base_model.invoke(
+                    response = invoke(base_model,
                         [SystemMessage(content=no_tools_prompt), *prompt_messages]
                     )
             else:
                 logger.warning("Tool-bound invocation failed (%s); answering directly.", exc)
                 no_tools_prompt = system_prompt + "\n\nCRITICAL: Answer directly in plain text. Do NOT call any tools."
-                response = base_model.invoke(
+                response = invoke(base_model,
                     [SystemMessage(content=no_tools_prompt), *prompt_messages]
                 )
 
@@ -219,14 +261,16 @@ def build_graph(
             direct_msg = HumanMessage(
                 content="Synthesize your final persona recommendation now in markdown text. Do NOT call any tools. Cite your sources."
             )
-            response = base_model.invoke(
+            response = invoke(base_model,
                 [SystemMessage(content=system_prompt), *prompt_messages, direct_msg]
             )
 
         # If on the initial research turn (tool_count == 0) the model answered directly without tools,
         # prompt it once to execute a retrieval tool to ground its answer.
         if (
-            not synthesis_mode
+            not state.get("discussion_mode")
+            and bool(active_tools)
+            and not synthesis_mode
             and tool_count == 0
             and not state.get("retrieved_docs")
             and isinstance(response, AIMessage)
@@ -239,7 +283,7 @@ def build_graph(
                     content="MANDATORY STEP: Before providing your final recommendation, execute a tool call (knowledge_retrieval or live_web_search) to gather grounded evidence for your position. Do NOT provide your final answer yet."
                 )
                 try:
-                    retry_response = active_model.invoke(
+                    retry_response = invoke(active_model,
                         [SystemMessage(content=system_prompt), *prompt_messages, retry_msg]
                     )
                     if isinstance(retry_response, AIMessage) and retry_response.tool_calls:
@@ -247,6 +291,8 @@ def build_graph(
                 except Exception as exc:
                     logger.debug("Tool retry invocation skipped: %s", exc)
 
+        if synthesis_mode and isinstance(response, AIMessage) and response.tool_calls:
+            response = AIMessage(content="No supporting evidence is available. Unable to complete a recommendation within the tool limit.")
         final_opinion = ""
         if isinstance(response, AIMessage) and not response.tool_calls:
             final_opinion = _content_text(response.content).strip()
@@ -256,7 +302,7 @@ def build_graph(
                     final_opinion = cleaned
             logger.info("final opinion: %d chars", len(final_opinion))
 
-        return {"messages": [response], "final_opinion": final_opinion}
+        return {"messages": [response], "final_opinion": final_opinion, "shown_documents": shown}
 
     # ------------------------------------------------------------------ #
     # tool_node                                                             #
@@ -274,18 +320,17 @@ def build_graph(
         web_documents: list[dict] = list(state.get("web_documents", []))
         queries: list[str] = list(state.get("retrieval_queries", []))
 
-        # Count total web searches across the conversation
-        existing_web_searches = sum(
-            1 for m in state.get("messages", [])
-            if getattr(m, "name", "") in ("live_web_search", live_web_search.name)
-        )
+        # Counters are reset by the discussion adapter at each turn entry.
+        existing_web_searches = state.get("web_searches", 0)
 
         for call in last.tool_calls:
             name = call.get("name", "")
             call_id = call.get("id", "")
             args = call.get("args", {})
 
-            if name not in registry:
+            if state.get("discussion_mode") and name in {"knowledge_retrieval", "retrieve_knowledge_base"}:
+                content = json.dumps({"error": "Internal retrieval belongs to the orchestrator", "documents": []})
+            elif name not in registry:
                 content = json.dumps({"error": "Unknown tool", "documents": []})
             elif name in {live_web_search.name, "live_web_search"} and existing_web_searches >= MAX_WEB_SEARCHES_PER_RUN:
                 logger.info("Web search limit reached (%d searches); skipping additional search.", MAX_WEB_SEARCHES_PER_RUN)
@@ -305,6 +350,14 @@ def build_graph(
                     })
 
             parsed = _parse_tool_documents(content, name)
+            if state.get("discussion_mode"):
+                remaining = max(0, 5 - min(len(retrieved_docs), 4) - len(web_documents))
+                parsed = [{**d, "text": clip(str(d.get("text", "")), 1200),
+                           "title": clip(str(d.get("title", "")), 200)} for d in parsed[:remaining]]
+                # Only the separately budgeted current-evidence block exposes
+                # documents to the model. Raw tool output cannot bypass it.
+                content = ("Candidate evidence received; admitted sources are in the current-evidence block."
+                           if parsed else "Tool failed or returned no additional usable evidence.")
             if name in {knowledge_retrieval.name, retrieve_knowledge_base.name, "knowledge_retrieval", "retrieve_knowledge_base"}:
                 query = args.get("query") if isinstance(args, dict) else None
                 if isinstance(query, str) and query not in queries:
@@ -329,6 +382,8 @@ def build_graph(
             "retrieved_docs": retrieved_docs,
             "retrieval_queries": queries,
             "web_documents": web_documents,
+            "tool_rounds": state.get("tool_rounds", 0) + 1,
+            "web_searches": existing_web_searches,
         }
 
     # ------------------------------------------------------------------ #

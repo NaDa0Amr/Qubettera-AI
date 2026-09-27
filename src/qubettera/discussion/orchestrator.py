@@ -14,7 +14,9 @@ from uuid import uuid4
 from .agent_graph import AgentGraph
 from .context import select_incoming_messages
 from .interfaces import AgentRuntime, EventSink, NoRetrievalProvider, NullEventSink, RetrievalProvider
-from .router import get_recipients
+from .router import get_recipients, broadcast_message
+from qubettera.agents.agent.budget import clip
+from .citations import CITATION, citation_errors, flag_answer
 from .models import (
     DiscussionConfig,
     DiscussionResult,
@@ -83,6 +85,8 @@ class DiscussionOrchestrator:
         sequence = 0
 
         try:
+            if hasattr(self.retrieval_provider, "begin_run"):
+                self.retrieval_provider.begin_run()
             self._write_event(
                 {
                     "event": "discussion_started",
@@ -134,6 +138,8 @@ class DiscussionOrchestrator:
                 sequence += len(stage_inputs)
                 previous_snapshot = current_snapshot
 
+            synthesis = self._execute_synthesis(config, discussion_id, sequence + 1, previous_snapshot)
+            messages.extend(self._persist_outcomes(discussion_id, [synthesis]))
             completed_at = self.clock()
             result = DiscussionResult(
                 discussion_id=discussion_id,
@@ -188,6 +194,45 @@ class DiscussionOrchestrator:
                 f"Discussion {discussion_id} failed after {len(messages)} completed turns: {exc}",
                 partial,
             ) from exc
+
+        finally:
+            if hasattr(self.retrieval_provider, "end_run"):
+                self.retrieval_provider.end_run()
+
+    def _execute_synthesis(self, config, discussion_id, sequence, final_messages):
+        # Round-robin cited evidence first so one participant cannot fill all slots.
+        preferred, other = [], []
+        for message in final_messages:
+            cited = set(CITATION.findall(message.content))
+            preferred.append([item for item in message.evidence if item.url in cited])
+            other.append([item for item in message.evidence if item.url not in cited])
+        selected, seen = [], set()
+        for groups in (preferred, other):
+            for index in range(max((len(group) for group in groups), default=0)):
+                for group in groups:
+                    if index < len(group):
+                        item = group[index]
+                        identity = item.url or (item.title, item.text)
+                        if identity not in seen and len(selected) < 10:
+                            selected.append(item)
+                            seen.add(identity)
+        request = TurnRequest(discussion_id=discussion_id, phase="synthesis",
+            round_number=config.num_rounds, sequence_number=sequence, agent_id="moderator",
+            recipient_ids=config.participant_ids, brief=config.brief,
+            incoming_messages=tuple(final_messages), evidence=tuple(selected))
+        result = self.agent_runtime.run_turn(request)
+        evidence = result.evidence if result.metadata.get("evidence_authoritative") else request.evidence
+        warnings = tuple(result.metadata.get("warnings", ()))
+        response = result.response_text.strip()
+        if not response:
+            raise RuntimeError("Moderator returned a blank response.")
+        warnings = tuple(dict.fromkeys((*warnings, *citation_errors(response, evidence))))
+        response = flag_answer(response, warnings)
+        message = RoutedMessage(message_id=f"{discussion_id}:{sequence:04d}",
+            discussion_id=discussion_id, phase="synthesis", round_number=config.num_rounds,
+            sequence_number=sequence, sender_id="moderator", recipient_ids=(),
+            content=response, opinion=response, evidence=evidence, warnings=warnings, created_at=self.clock())
+        return broadcast_message(message, config.participant_ids), result.metadata
 
     def _execute_stage(
         self,
@@ -277,8 +322,20 @@ class DiscussionOrchestrator:
             previous_opinion=previous_opinion,
         )
 
-        query = self.retrieval_provider.build_query(request)
-        evidence = self.retrieval_provider.retrieve(query, request) if query else ()
+        retrieval_warnings = ()
+        query = ""
+        try:
+            query = self.retrieval_provider.build_query(request)[:512]
+            evidence = self.retrieval_provider.retrieve(query, request) if query else ()
+            if hasattr(self.retrieval_provider, "take_warnings"):
+                retrieval_warnings = self.retrieval_provider.take_warnings()
+        except Exception as exc:
+            evidence = ()
+            retrieval_warnings = (f"Retrieval unavailable ({type(exc).__name__}); no fresh internal evidence.",)
+        evidence = tuple(replace(item, text=clip(item.text, 1200), title=clip(item.title, 200)) for item in evidence[:5])
+        if retrieval_warnings:
+            self._write_event({"event": "retrieval_warning", "discussion_id": discussion_id,
+                "agent_id": agent_id, "sequence_number": sequence_number, "warnings": retrieval_warnings})
         request = replace(request, retrieval_query=query, evidence=tuple(evidence))
         turn_result = self.agent_runtime.run_turn(request)
 
@@ -289,7 +346,15 @@ class DiscussionOrchestrator:
         if not opinion:
             raise RuntimeError(f"Agent {agent_id!r} returned a blank opinion.")
 
-        all_evidence = self._dedupe_evidence((*request.evidence, *turn_result.evidence))
+        all_evidence = (turn_result.evidence if turn_result.metadata.get("evidence_authoritative")
+                        else self._dedupe_evidence((*request.evidence, *turn_result.evidence)))
+        warnings = tuple(dict.fromkeys((*retrieval_warnings, *turn_result.metadata.get("warnings", ()),
+                                      *citation_errors(response, all_evidence))))
+        # Runtime has already repaired and checkpointed its own citation warnings.
+        response = flag_answer(response, warnings)
+        opinion = response
+        if retrieval_warnings and hasattr(self.agent_runtime, "update_accepted_answer"):
+            self.agent_runtime.update_accepted_answer(request, response)
         retrieval_queries = tuple(item for item in (query, *turn_result.retrieval_queries) if item)
         message = RoutedMessage(
             message_id=f"{discussion_id}:{sequence_number:04d}",
@@ -301,6 +366,7 @@ class DiscussionOrchestrator:
             recipient_ids=recipients,
             content=response,
             opinion=opinion,
+            warnings=warnings,
             retrieval_query=" | ".join(dict.fromkeys(retrieval_queries)),
             evidence=all_evidence,
             created_at=self.clock(),

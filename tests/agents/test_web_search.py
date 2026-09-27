@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from qubettera.agents.web_search import WebSearchExecutionError, search_web
+from qubettera.agents.search.tavily import WebSearchExecutionError, TavilyProvider
+from unittest.mock import patch
+
+def search_web(query, max_results=5, *, api_key="", session=None):
+    with patch.dict("os.environ", {"TAVILY_API_KEY": api_key}):
+        return TavilyProvider(session=session).search(query, max_results=max_results)
 
 
 class FakeResponse:
@@ -52,9 +57,8 @@ class WebSearchTests(unittest.TestCase):
             session=session,
         )
 
-        self.assertEqual(results[0]["tool"], "search_web")
-        self.assertEqual(results[0]["url"], "https://example.org/research")
-        self.assertEqual(results[0]["score"], 0.91)
+        self.assertEqual(results[0].url, "https://example.org/research")
+        self.assertEqual(results[0].score, 0.91)
         call = session.calls[0]
         self.assertEqual(call["headers"]["X-Tavily-Access-Mode"], "keyless")
         self.assertNotIn("Authorization", call["headers"])
@@ -69,7 +73,7 @@ class WebSearchTests(unittest.TestCase):
 
     def test_rate_limit_error_is_controlled(self) -> None:
         session = FakeSession(FakeResponse({}, status_code=429))
-        with self.assertRaisesRegex(WebSearchExecutionError, "limit was reached"):
+        with self.assertRaisesRegex(WebSearchExecutionError, "limit reached"):
             search_web("test query", api_key="", session=session)
 
     def test_rejects_invalid_max_results(self) -> None:
