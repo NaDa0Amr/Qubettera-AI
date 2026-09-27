@@ -44,6 +44,8 @@ qubettera rag evaluate --mode adaptive
 qubettera agent opinion dr_aris "Dense versus sparse transformer layers"
 qubettera discuss run --mode fake
 qubettera discuss run --mode live
+qubettera discuss run --mode live --analyze
+qubettera analytics run outputs/discussions/<discussion-id>.jsonl
 ```
 
 `--adaptive-expand` first runs normal hybrid retrieval and invokes the query
@@ -65,6 +67,14 @@ independent from the main generation model's endpoint.
 Generated corpus files live in `data/`; opinions and discussions live in
 `outputs/`. Architecture notes and the former coursework documentation are in
 `docs/`.
+
+Analytics reads a completed live discussion log and writes a JSON summary,
+Markdown report, and PNG charts to `outputs/analytics/`. Install the optional
+dependencies with `python -m pip install -e ".[analytics]"` first. Stance
+scoring uses the configured LLM provider, and sentiment scoring downloads a
+local transformer model on first use. See [analytics documentation](docs/analytics/README.md)
+for exact commands, metric definitions, and limits. Fake discussion logs contain
+placeholder opinions and are rejected by the analytics loader.
 
 ## Discussion runtime
 

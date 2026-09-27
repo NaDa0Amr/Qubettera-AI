@@ -50,6 +50,16 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--no-retrieval", action="store_true")
     run.add_argument("--max-workers", type=int, default=None,
                      help="Parallel agents per round (Kaggle default: 1; W&B/fake default: 5).")
+    run.add_argument("--analyze", action="store_true",
+                     help="Analyze the completed live discussion after saving it.")
+
+    analytics = commands.add_parser("analytics", help="Analyze a saved discussion")
+    analytics_commands = analytics.add_subparsers(dest="analytics_command", required=True)
+    analyze = analytics_commands.add_parser("run")
+    analyze.add_argument("discussion", type=Path, help="Path to a discussion JSONL log")
+    analyze.add_argument("--output-dir", type=Path, default=OUTPUTS_DIR / "analytics")
+    analyze.add_argument("--no-visuals", action="store_true")
+    analyze.add_argument("--no-report", action="store_true")
 
     commands.add_parser("doctor")
     return parser
@@ -73,6 +83,10 @@ def _run_pipeline(skip_collection: bool) -> None:
 
 def _run_discussion(args: argparse.Namespace) -> int:
     from contextlib import ExitStack
+
+    if args.analyze and args.mode != "live":
+        print("--analyze requires --mode live; fake opinions cannot be scored.", file=sys.stderr)
+        return 2
 
     with ExitStack() as stack:
         import os
@@ -111,7 +125,14 @@ def _run_discussion(args: argparse.Namespace) -> int:
         ).run(config)
         print(f"Discussion {result.discussion_id}: {result.status} ({len(result.messages)} messages)")
         print(f"Event log: {output}")
-        return 0
+    if args.analyze and result.status == "completed":
+        return _run_analytics(argparse.Namespace(
+            discussion=output,
+            output_dir=OUTPUTS_DIR / "analytics",
+            no_visuals=False,
+            no_report=False,
+        ))
+    return 0
 
 
 def _doctor() -> int:
@@ -132,6 +153,35 @@ def _doctor() -> int:
         failures += 1
         print(f"[FAIL] Generation provider: {exc}")
     return 1 if failures else 0
+
+
+def _run_analytics(args: argparse.Namespace) -> int:
+    from qubettera.analytics.engine import get_analytics, save_analytics
+    from qubettera.analytics.report import write_report
+
+    if not args.discussion.is_file():
+        print(f"Discussion log not found: {args.discussion}", file=sys.stderr)
+        return 1
+    try:
+        result = get_analytics(args.discussion)
+        output_dir = args.output_dir
+        visuals_dir = output_dir / "visuals"
+        if not args.no_visuals:
+            from qubettera.analytics.visualize import create_visualizations
+
+            create_visualizations(result, visuals_dir)
+        analytics_path = save_analytics(result, output_dir)
+        if not args.no_report:
+            report_path = output_dir / f"report_{result['discussion_id']}.md"
+            write_report(result, report_path, visuals_dir=visuals_dir if not args.no_visuals else None)
+            print(f"Report: {report_path}")
+        print(f"Analytics: {analytics_path}")
+        return 0
+    except ModuleNotFoundError as exc:
+        print(f"Analytics dependency missing: {exc.name}. Install with pip install -e '.[analytics]'", file=sys.stderr)
+    except (ValueError, RuntimeError) as exc:
+        print(f"Analytics failed: {exc}", file=sys.stderr)
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "discuss" and args.discuss_command == "run":
         return _run_discussion(args)
+    if args.command == "analytics" and args.analytics_command == "run":
+        return _run_analytics(args)
     return 2
 
 

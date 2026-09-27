@@ -43,6 +43,7 @@ def get_chat_model(
     provider: str | None = None,
     model: str | None = None,
     callback_handler: AgentCallbackHandler | None = None,
+    temperature: float | None = None,
 ) -> BaseChatModel:
     """Factory for LangChain chat models that support tool calling.
 
@@ -64,7 +65,10 @@ def get_chat_model(
     ).strip().lower()
     # Resolve the model inside each provider branch. A local Ollama model ID
     # in LLM_MODEL must not override a provider-specific WANDB_MODEL.
-    temperature = _number_env("LLM_TEMPERATURE", "0.7", float)
+    temperature = (
+        temperature if temperature is not None
+        else _number_env("LLM_TEMPERATURE", "0.7", float)
+    )
 
     local_handler = callback_handler or AgentCallbackHandler(
         verbose=os.getenv("LLM_VERBOSE", "false").lower() == "true"

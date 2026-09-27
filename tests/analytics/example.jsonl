@@ -1,0 +1,7 @@
+{"event":"discussion_started","discussion_id":"example","config":{"brief":{"objective":"Choose an architecture","topics":["dense versus MoE"]}},"graph":{"nodes":["a","b"],"edges":[["a","b"],["b","a"]]}}
+{"event":"turn_completed","message":{"message_id":"m0a","sender_id":"a","round_number":0,"phase":"initial","content":"I recommend dense layers.","recipient_ids":["b"]}}
+{"event":"turn_completed","message":{"message_id":"m0b","sender_id":"b","round_number":0,"phase":"initial","content":"I recommend MoE layers.","recipient_ids":["a"]}}
+{"event":"turn_completed","message":{"message_id":"m1a","sender_id":"a","round_number":1,"phase":"discussion","content":"I recommend dense layers.","recipient_ids":["b"]}}
+{"event":"turn_completed","message":{"message_id":"m1b","sender_id":"b","round_number":1,"phase":"discussion","content":"I recommend MoE layers.","recipient_ids":["a"]}}
+{"event":"turn_completed","message":{"sender_id":"moderator","phase":"synthesis","round_number":2,"content":"Final recommendation."}}
+{"event":"discussion_completed","discussion_id":"example"}

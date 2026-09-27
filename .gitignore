@@ -227,6 +227,7 @@ __marimo__/
 /outputs/memory/*
 /outputs/opinions/*
 /outputs/discussions/*
+/outputs/analytics/*
 !/outputs/memory/.gitkeep
 !/outputs/opinions/.gitkeep
 !/outputs/discussions/.gitkeep

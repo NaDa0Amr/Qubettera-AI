@@ -40,6 +40,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio"]
+analytics = ["transformers>=4.40,<6", "torch>=2", "Pillow>=10", "networkx>=3"]
 
 [project.scripts]
 qubettera = "qubettera.cli:main"
@@ -50,4 +51,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["slow: longer running tests", "integration: tests requiring external assets"]
 
