@@ -1,52 +1,60 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${PGDATABASE:-ragdb}
       POSTGRES_USER: ${PGUSER:-postgres}
-      POSTGRES_PASSWORD: ${PGPASSWORD:-change_me}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?Set PGPASSWORD in .env}
     ports:
-      - "${PGPORT:-5432}:5432"
+      - "127.0.0.1:${PGPORT:-5432}:5432"
     volumes:
       - qubettera-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-ragdb}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 12
 
   backend:
-    profiles: [web]
+    image: ${DOCKERHUB_NAMESPACE:-qubettera-local}/qubettera-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
     env_file: .env
     environment:
       PGHOST: postgres
       PGPORT: 5432
+      EMBEDDING_DEVICE: cpu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./outputs:/app/outputs
       - ./data:/app/data
-      - qubettera-models:/root/.cache/huggingface
+      - qubettera-models:/app/.cache/huggingface
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+    stop_grace_period: 60s
 
   frontend:
-    profiles: [web]
-    build: ./frontend
+    image: ${DOCKERHUB_NAMESPACE:-qubettera-local}/qubettera-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Qubettera}
+    restart: unless-stopped
+    init: true
     environment:
       FASTAPI_INTERNAL_URL: http://backend:8000
       MOCK_BACKEND: "false"
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -54,4 +62,3 @@ services:
 volumes:
   qubettera-postgres:
   qubettera-models:
-

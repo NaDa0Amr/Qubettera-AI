@@ -1,0 +1,39 @@
+# Optional local generation; combine with the base and optionally Hub files.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - qubettera-ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  ollama-init:
+    image: ollama/ollama:latest
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['ollama pull "$$OLLAMA_MODEL"']
+    depends_on:
+      ollama:
+        condition: service_healthy
+  backend:
+    environment:
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
+      QUERY_EXPANSION_BASE_URL: http://ollama:11434
+      QUERY_EXPANSION_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      PAPER_FILTER_LLM_BASE_URL: http://ollama:11434
+      PAPER_FILTER_LLM_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+
+volumes:
+  qubettera-ollama:

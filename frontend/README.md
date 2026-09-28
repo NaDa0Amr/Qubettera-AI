@@ -52,7 +52,7 @@ The build produces standalone server output for the multi-stage Dockerfile.
 From the project root, start the full stack using:
 
 ```powershell
-docker compose --profile web up --build -d
+docker compose up --build -d --wait
 ```
 
 Compose sets `FASTAPI_INTERNAL_URL=http://backend:8000` and disables mock mode.
@@ -76,3 +76,6 @@ worker because analytics task deduplication is process-local.
 
 Shared components live in `components/`, streaming hooks in `hooks/`, API types
 in `types/`, and server-side collection access in `lib/backend.ts`.
+
+See [Docker deployment and publishing](../docs/docker.md) for Docker Hub images,
+persistent storage, optional Ollama, and container smoke checks.

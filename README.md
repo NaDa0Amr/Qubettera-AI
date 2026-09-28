@@ -17,7 +17,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
-docker compose up -d
+docker compose up -d postgres
 qubettera doctor
 ```
 
@@ -67,16 +67,17 @@ analytics deliberately rejects fake opinions. Live mode uses the same configured
 LLM, PostgreSQL retrieval, and analytics models as the CLI. Existing CLI reports
 can be opened through discussion history without recomputing them.
 
-For the containerized stack (root `.env` required):
+For the complete containerized stack (root `.env` required), see
+[Docker deployment and Docker Hub publishing](docs/docker.md):
 
 ```powershell
-docker compose --profile web up --build -d
+docker compose up --build -d --wait
 ```
 
 This starts PostgreSQL, the API, and the UI, with shared `data/` and `outputs/`
 folders and a persistent model cache. Populate the knowledge base using the RAG
 commands below. If an LLM runs on the host, use `host.docker.internal` instead
-of `localhost` in its URL. Plain `docker compose up -d` still starts only PostgreSQL.
+of `localhost` in its URL. Use `docker compose up -d postgres` to start only PostgreSQL.
 The web ports bind to localhost; remote hosting needs an authenticated reverse
 proxy with SSE buffering disabled and long request timeouts.
 

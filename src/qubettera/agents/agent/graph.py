@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from qubettera.agents.agent.state import AgentState
@@ -154,7 +155,7 @@ def build_graph(
     # ------------------------------------------------------------------ #
     # call_model node                                                       #
     # ------------------------------------------------------------------ #
-    def call_model(state: AgentState) -> dict[str, Any]:
+    def call_model(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         """Invoke the LLM with the current conversation context."""
         if "persona" not in state:
             raise ValueError("AgentState requires a persona before call_model.")
@@ -221,7 +222,15 @@ def build_graph(
 
         def invoke(target, prompt):
             schemas = active_tools if target is model_with_tools and not synthesis_mode else ()
-            return budget.invoke(target, prompt, schemas, protected=protected)
+            stream_tokens = bool(config.get("configurable", {}).get("stream_tokens"))
+            return budget.invoke(
+                target,
+                prompt,
+                schemas,
+                protected=protected,
+                config=config,
+                stream=stream_tokens,
+            )
 
         try:
             response = invoke(active_model,

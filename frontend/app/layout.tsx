@@ -5,6 +5,7 @@ import { publicEnv } from "@/lib/env";
 import { TopNav } from "@/components/layout/TopNav";
 import { Footer } from "@/components/layout/Footer";
 import { ToastContainer } from "@/components/ui/Toast";
+import { DiscussionProvider } from "@/contexts/DiscussionContext";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -54,7 +55,10 @@ export default function RootLayout({
       <body className="flex min-h-full flex-col bg-slate-50 dark:bg-slate-950 font-sans">
         <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-white">Skip to content</a>
         <TopNav />
-        <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">{children}</main>
+        {/* Keep active SSE requests above page-level route transitions. */}
+        <DiscussionProvider>
+          <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">{children}</main>
+        </DiscussionProvider>
         <Footer />
         <ToastContainer />
       </body>

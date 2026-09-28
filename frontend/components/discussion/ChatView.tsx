@@ -4,23 +4,14 @@ import { useEffect, useRef, useCallback } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { StreamingMessage } from "./StreamingMessage";
 import { RoundHeader } from "./RoundHeader";
-import type { DiscussionMessage } from "@/types";
+import type { DiscussionMessage, StreamingDraft } from "@/types";
 
 interface ChatViewProps {
   messages: DiscussionMessage[];
   agentNames: Record<string, string>;
   streaming: boolean;
-  /** ID of the agent currently generating tokens (null between turns). */
-  streamingAgentId?: string | null;
-  /** Accumulated token buffer for the currently-speaking agent. */
-  streamingText?: string;
-  /**
-   * Number of participating agents. Used to decide whether the current
-   * round is fully populated, which determines whether the streaming message
-   * belongs to the last group or starts a new one.
-   * Defaults to the number of keys in `agentNames`.
-   */
-  numAgents?: number;
+  /** Partial messages from all concurrently generating agents. */
+  streamingMessages?: Record<string, StreamingDraft>;
 }
 
 interface RoundGroup {
@@ -28,6 +19,7 @@ interface RoundGroup {
   roundNumber: number;
   phase: "initial" | "discussion";
   messages: DiscussionMessage[];
+  drafts: Array<{ agentId: string; text: string }>;
 }
 
 // Minimum gap between scroll calls during token streaming. Without this,
@@ -47,6 +39,7 @@ function groupByRound(messages: DiscussionMessage[]): RoundGroup[] {
         roundNumber: msg.round_number,
         phase: msg.phase,
         messages: [],
+        drafts: [],
       });
     }
     groups.get(key)!.messages.push(msg);
@@ -57,48 +50,11 @@ function groupByRound(messages: DiscussionMessage[]): RoundGroup[] {
   );
 }
 
-/**
- * Determine which round the currently-streaming message belongs to.
- *
- * Logic:
- *   - No messages yet → streaming turn is the very first of the discussion,
- *     which always lives in the initial phase, round 0.
- *   - Some messages exist → count how many messages the last round contains.
- *     If it has fewer than `numAgents`, the streaming turn is the next agent
- *     in the *same* round. Otherwise, the round is full and the streaming
- *     turn starts a new one.
- */
-function computeStreamingRound(
-  messages: DiscussionMessage[],
-  numAgents: number,
-): { roundNumber: number; phase: "initial" | "discussion" } | null {
-  if (messages.length === 0) {
-    return { roundNumber: 0, phase: "initial" };
-  }
-
-  const last = messages[messages.length - 1];
-  const messagesInLastRound = messages.filter(
-    (m) => m.round_number === last.round_number && m.phase === last.phase,
-  ).length;
-
-  if (messagesInLastRound < numAgents) {
-    return { roundNumber: last.round_number, phase: last.phase };
-  }
-
-  // Round is full — the streaming turn opens the next one.
-  if (last.phase === "initial") {
-    return { roundNumber: 1, phase: "discussion" };
-  }
-  return { roundNumber: last.round_number + 1, phase: "discussion" };
-}
-
 export function ChatView({
   messages,
   agentNames,
   streaming,
-  streamingAgentId = null,
-  streamingText = "",
-  numAgents,
+  streamingMessages = {},
 }: ChatViewProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -109,25 +65,20 @@ export function ChatView({
   const prevMessageCountRef = useRef(0);
 
   const groups = groupByRound(messages);
-  const effectiveNumAgents = numAgents ?? Object.keys(agentNames).length;
-
-  const streamingRound =
-    streamingAgentId !== null
-      ? computeStreamingRound(messages, effectiveNumAgents)
-      : null;
-
-  const streamingAgentName = streamingAgentId
-    ? agentNames[streamingAgentId] ?? streamingAgentId
-    : null;
-
-  // Does a group already exist for the round the streaming message belongs to?
-  const streamingRoundHasGroup =
-    streamingRound !== null &&
-    groups.some(
-      (g) =>
-        g.roundNumber === streamingRound.roundNumber &&
-        g.phase === streamingRound.phase,
-    );
+  const byKey = new Map(groups.map((group) => [group.key, group]));
+  for (const [agentId, draft] of Object.entries(streamingMessages)) {
+    const roundNumber = draft.round ?? messages.at(-1)?.round_number ?? 0;
+    const phase = roundNumber === 0 ? "initial" : "discussion";
+    const key = `${phase}-${roundNumber}`;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, phase, roundNumber, messages: [], drafts: [] };
+      groups.push(group);
+      byKey.set(key, group);
+    }
+    group.drafts.push({ agentId, text: draft.text });
+  }
+  groups.sort((a, b) => a.roundNumber - b.roundNumber);
 
   // Detect manual scroll: pause auto-scroll when the user scrolls more than
   // 100px from the bottom.
@@ -174,9 +125,9 @@ export function ChatView({
     bottomRef.current?.scrollIntoView({
       behavior: isNewMessage ? "smooth" : "auto",
     });
-  }, [messages, streaming, streamingText]);
+  }, [messages, streaming, streamingMessages]);
 
-  if (messages.length === 0 && !streamingAgentId) {
+  if (groups.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center py-16 text-sm text-slate-400 dark:text-slate-500">
         Waiting for first turn…
@@ -192,72 +143,32 @@ export function ChatView({
       aria-live={streaming ? "polite" : undefined}
       aria-label="Discussion messages"
     >
-      {groups.map((group) => {
-        const isStreamingGroup =
-          streamingRound !== null &&
-          streamingRound.roundNumber === group.roundNumber &&
-          streamingRound.phase === group.phase;
-
-        return (
-          <div key={group.key}>
-            <RoundHeader
-              roundNumber={group.roundNumber}
-              phase={group.phase}
-            />
-            <div className="mt-4 space-y-6">
-              {group.messages.map((msg) => (
-                <ChatMessage
-                  key={msg.message_id}
-                  message={msg}
-                  agentName={agentNames[msg.sender_id] ?? msg.sender_id}
-                />
-              ))}
-
-              {/*
-                If the streaming turn belongs to this round, render the
-                StreamingMessage at the end of this group instead of floating
-                it after all groups. This keeps the streaming text visually
-                anchored to the correct round header.
-              */}
-              {isStreamingGroup && streamingAgentId && streamingAgentName && (
-                <StreamingMessage
-                  agentId={streamingAgentId}
-                  agentName={streamingAgentName}
-                  text={streamingText}
-                />
-              )}
-            </div>
-          </div>
-        );
-      })}
-
-      {/*
-        If the streaming turn is the first speaker of a new round that has no
-        completed messages yet, render it as its own group with a RoundHeader.
-        Without this, a streaming message arriving at the start of Round 1
-        would have no header above it until the first turn of that round
-        completed.
-      */}
-      {streamingAgentId &&
-        streamingAgentName &&
-        streamingRound &&
-        !streamingRoundHasGroup && (
-          <div
-            key={`streaming-${streamingRound.phase}-${streamingRound.roundNumber}`}
-          >
-            <RoundHeader
-              roundNumber={streamingRound.roundNumber}
-              phase={streamingRound.phase}
-            />
-            <div className="mt-4 space-y-6">
-              <StreamingMessage
-                agentId={streamingAgentId}
-                agentName={streamingAgentName}
-                text={streamingText}
+      {groups.map((group) => (
+        <div key={group.key}>
+          <RoundHeader
+            roundNumber={group.roundNumber}
+            phase={group.phase}
+          />
+          <div className="mt-4 space-y-6">
+            {group.messages.map((msg) => (
+              <ChatMessage
+                key={msg.message_id}
+                message={msg}
+                agentName={agentNames[msg.sender_id] ?? msg.sender_id}
               />
-            </div>
+            ))}
+
+            {group.drafts.map(({ agentId, text }) => (
+              <StreamingMessage
+                key={agentId}
+                agentId={agentId}
+                agentName={agentNames[agentId] ?? agentId}
+                text={text}
+              />
+            ))}
           </div>
-        )}
+        </div>
+      ))}
 
       <div ref={bottomRef} aria-hidden="true" />
     </div>

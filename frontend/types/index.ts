@@ -167,6 +167,12 @@ export interface ParticipantState {
 
 export type DiscussionStreamStatus = "idle" | "streaming" | "done" | "error";
 
+export interface StreamingDraft {
+  text: string;
+  round: number | null;
+  runId: string;
+}
+
 export interface DiscussionStreamState {
   status: DiscussionStreamStatus;
   discussionId: string | null;
@@ -177,10 +183,8 @@ export interface DiscussionStreamState {
   participants: Record<string, ParticipantState>;
   error: string | null;
   lastEventAt: number | null;
-  /** ID of the agent currently generating a response (null when idle between turns). */
-  streamingAgentId: string | null;
-  /** Accumulated token buffer for the agent currently speaking. */
-  streamingText: string;
+  /** Partial responses from agents generating in parallel. */
+  streamingMessages: Record<string, StreamingDraft>;
 }
 
 // ---------------------------------------------------------------------------

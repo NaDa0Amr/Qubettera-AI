@@ -30,7 +30,6 @@ export default function DiscussionPage({ params }: PageProps) {
   } | null>(null);
   const replayData = replay?.id === id ? replay.data : undefined;
   const replayError = replay?.id === id ? replay.error : undefined;
-  const replayLoading = replay?.id !== id;
 
   // A discussion is "live" when the React context has an active SSE stream:
   //   a) Context ID matches URL and stream isn't idle, OR
@@ -39,6 +38,9 @@ export default function DiscussionPage({ params }: PageProps) {
   const isLive =
     (state.discussionId === id && state.status !== "idle") ||
     (state.status === "streaming" && state.discussionId === null);
+  // A live discussion renders from context immediately. Replay loading only
+  // applies when opening an existing discussion without its SSE connection.
+  const replayLoading = !isLive && replay?.id !== id;
 
   // ── Replay (no live SSE context) ─────────────────────────────────────────
   // Poll active transcripts until the backend reports a terminal state.
@@ -226,8 +228,7 @@ export default function DiscussionPage({ params }: PageProps) {
               messages={messages}
               agentNames={agentNames}
               streaming={streamStatus === "streaming"}
-              streamingAgentId={isLive ? state.streamingAgentId : null}
-              streamingText={isLive ? state.streamingText : ""}
+              streamingMessages={isLive ? state.streamingMessages : {}}
             />
           )}
         </div>

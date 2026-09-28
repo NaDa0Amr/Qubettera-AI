@@ -1,0 +1,18 @@
+# Compose 2.24.4+. Merge after docker-compose.yml for a source-free deployment.
+services:
+  postgres:
+    ports: !reset []
+  backend:
+    image: ${DOCKERHUB_NAMESPACE:?Set your Docker Hub namespace}/qubettera-backend:${IMAGE_TAG:-latest}
+    build: !reset null
+    ports: !reset []
+    volumes:
+      - qubettera-data:/app/data
+      - qubettera-outputs:/app/outputs
+  frontend:
+    image: ${DOCKERHUB_NAMESPACE:?Set your Docker Hub namespace}/qubettera-frontend:${IMAGE_TAG:-latest}
+    build: !reset null
+
+volumes:
+  qubettera-data:
+  qubettera-outputs:

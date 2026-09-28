@@ -42,7 +42,9 @@ def _run_discussion_in_thread(*, payload, discussion_id, event_queue):
             if payload.mode == "live":
                 from qubettera.discussion.week2_adapter import Week2AgentRuntime
                 from qubettera.discussion.retrieval_provider import TeamRetrievalProvider
-                runtime = stack.enter_context(Week2AgentRuntime())
+                # queue.Queue is thread-safe. Each agent turn installs its own
+                # callback, so parallel model streams retain the right labels.
+                runtime = stack.enter_context(Week2AgentRuntime(token_sink=event_queue.put))
                 retrieval = TeamRetrievalProvider()
             else:
                 from qubettera.discussion.fakes import DeterministicAgentRuntime, DeterministicRetrievalProvider

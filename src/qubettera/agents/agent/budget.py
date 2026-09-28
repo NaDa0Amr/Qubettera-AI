@@ -91,11 +91,25 @@ class InputBudget:
             raise ValueError("Required instructions/evidence/tool schemas exceed the model input budget.")
         return [*result, *protected]
 
-    def invoke(self, model, messages, tools=(), *, protected=()):
+    def invoke(
+        self,
+        model,
+        messages,
+        tools=(),
+        *,
+        protected=(),
+        config=None,
+        stream: bool = False,
+    ):
         fitted = self.fit(messages, tools, protected=protected)
         # Production LangChain models/runnables accept a generation cap. Tiny
         # scripted test models deliberately expose only invoke(messages).
         if hasattr(model, "bind"):
+            invoke_kwargs = {"config": config} if config is not None else {}
+            if stream:
+                # BaseChatModel uses this flag to select its streaming transport
+                # even when the caller ultimately wants one assembled AIMessage.
+                invoke_kwargs["stream"] = True
             target = getattr(model, "bound", model)
             if hasattr(target, "num_predict"):
                 # ChatOllama reads generation settings from model fields into
@@ -107,6 +121,6 @@ class InputBudget:
                     if kwargs.get("options") is not None:
                         kwargs["options"] = {**kwargs["options"], "num_predict": self.answer}
                     capped = model.model_copy(update={"bound": capped, "kwargs": kwargs})
-                return capped.invoke(fitted)
-            return model.bind(max_tokens=self.answer).invoke(fitted)
+                return capped.invoke(fitted, **invoke_kwargs)
+            return model.bind(max_tokens=self.answer).invoke(fitted, **invoke_kwargs)
         return model.invoke(fitted)

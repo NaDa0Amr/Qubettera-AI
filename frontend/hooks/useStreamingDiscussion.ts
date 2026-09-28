@@ -14,6 +14,7 @@ import type {
   TokenChunkData,
   DiscussionCompletedData,
   DiscussionFailedData,
+  StreamingDraft,
 } from "@/types";
 
 // 4 minutes. Week 2 agents call retrieval tools between LLM generations, and
@@ -34,8 +35,7 @@ const INITIAL_STATE: DiscussionStreamState = {
   participants: {},
   error: null,
   lastEventAt: null,
-  streamingAgentId: null,
-  streamingText: "",
+  streamingMessages: {},
 };
 
 function buildParticipants(ids: string[]): Record<string, ParticipantState> {
@@ -78,21 +78,13 @@ function applyEvent(
     const msg: DiscussionMessage = d.message;
 
     const updatedParticipants = { ...prev.participants };
-    // Anyone previously "speaking" → "spoke".
-    for (const id of Object.keys(updatedParticipants)) {
-      if (updatedParticipants[id].status === "speaking") {
-        updatedParticipants[id] = { id, status: "spoke" };
-      }
-    }
-    // The current sender → "spoke".
+    // Other agents may still be generating in parallel.
     updatedParticipants[msg.sender_id] = { id: msg.sender_id, status: "spoke" };
 
     return {
       ...prev,
       messages: [...prev.messages, msg],
       participants: updatedParticipants,
-      streamingAgentId: null,
-      streamingText: "",
       lastEventAt: Date.now(),
     };
   }
@@ -110,8 +102,6 @@ function applyEvent(
       status: "done" as DiscussionStreamStatus,
       discussionId: d.discussion_id,
       participants: finalParticipants,
-      streamingAgentId: null,
-      streamingText: "",
       lastEventAt: Date.now(),
     };
   }
@@ -122,8 +112,6 @@ function applyEvent(
       ...prev,
       status: "error" as DiscussionStreamStatus,
       error: d.error,
-      streamingAgentId: null,
-      streamingText: "",
       lastEventAt: Date.now(),
     };
   }
@@ -138,11 +126,9 @@ export function useStreamingDiscussion() {
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef(0);
 
-  // Streaming token buffer + scheduling. Tokens are accumulated in a ref and
-  // flushed to React state at most once per animation frame, so a stream that
-  // emits 50+ tokens per second does not cause 50+ re-renders per second.
-  const streamingBufferRef = useRef<string>("");
-  const streamingAgentRef = useRef<string | null>(null);
+  // Keep separate drafts for parallel agents. Flush to React at most once per
+  // animation frame, even when many tokens arrive in the same frame.
+  const streamingBufferRef = useRef<Record<string, StreamingDraft>>({});
   const rafRef = useRef<number | null>(null);
 
   const cancelPendingRaf = useCallback(() => {
@@ -177,36 +163,31 @@ export function useStreamingDiscussion() {
   }, []);
 
   /**
-   * token_chunk handler. Appends to a buffer ref and schedules a single
-   * requestAnimationFrame flush. Multiple tokens in the same frame collapse
-   * into one setState. Participant status is updated only when the speaking
-   * agent changes.
+   * Append this model run's text to its agent's draft. A new model run replaces
+   * earlier internal output, such as a tool decision before the final answer.
    */
   const handleTokenChunk = useCallback((d: TokenChunkData) => {
-    const agentChanged = d.agent_id !== streamingAgentRef.current;
+    if (!d.agent_id) return;
+    const id = d.agent_id;
+    const previous = streamingBufferRef.current[id];
+    streamingBufferRef.current[id] = {
+      text: (previous?.runId === d.run_id ? previous.text : "") + d.token,
+      round: d.round,
+      runId: d.run_id,
+    };
 
-    if (agentChanged) {
-      streamingAgentRef.current = d.agent_id;
-      streamingBufferRef.current = "";
-
-      // Mark the new speaker as "speaking" once. Don't do this per token.
-      if (d.agent_id) {
-        const id = d.agent_id;
-        setState((prev) => {
-          if (!prev.participants[id]) return prev;
-          return {
-            ...prev,
-            streamingAgentId: id,
-            participants: {
-              ...prev.participants,
-              [id]: { id, status: "speaking" },
-            },
-          };
-        });
-      }
+    if (!previous) {
+      setState((prev) => {
+        if (!prev.participants[id]) return prev;
+        return {
+          ...prev,
+          participants: {
+            ...prev.participants,
+            [id]: { id, status: "speaking" },
+          },
+        };
+      });
     }
-
-    streamingBufferRef.current += d.token;
 
     // Schedule a single state flush per frame.
     if (rafRef.current === null) {
@@ -214,8 +195,7 @@ export function useStreamingDiscussion() {
         rafRef.current = null;
         setState((prev) => ({
           ...prev,
-          streamingAgentId: streamingAgentRef.current,
-          streamingText: streamingBufferRef.current,
+          streamingMessages: { ...streamingBufferRef.current },
           lastEventAt: Date.now(),
         }));
       });
@@ -230,20 +210,19 @@ export function useStreamingDiscussion() {
         return;
       }
 
-      // turn_completed and terminal events must clear the streaming buffer
-      // and cancel any pending rAF before the state update, otherwise a
-      // stale flush could overwrite the freshly finalised state.
-      if (
-        eventName === "turn_completed" ||
-        eventName === "discussion_completed" ||
-        eventName === "discussion_failed"
-      ) {
-        streamingBufferRef.current = "";
-        streamingAgentRef.current = null;
+      if (eventName === "turn_completed") {
+        const completed = data as TurnCompletedData;
+        delete streamingBufferRef.current[completed.message.sender_id];
+        cancelPendingRaf();
+      } else if (eventName === "discussion_completed" || eventName === "discussion_failed") {
+        streamingBufferRef.current = {};
         cancelPendingRaf();
       }
 
-      setState((prev) => applyEvent(prev, eventName, data));
+      setState((prev) => ({
+        ...applyEvent(prev, eventName, data),
+        streamingMessages: { ...streamingBufferRef.current },
+      }));
     },
     [handleTokenChunk, cancelPendingRaf],
   );
@@ -254,8 +233,7 @@ export function useStreamingDiscussion() {
       abortRef.current?.abort();
       if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
       cancelPendingRaf();
-      streamingBufferRef.current = "";
-      streamingAgentRef.current = null;
+      streamingBufferRef.current = {};
       retryCountRef.current = 0;
 
       setState({ ...INITIAL_STATE, status: "streaming" });
@@ -345,17 +323,15 @@ export function useStreamingDiscussion() {
     abortRef.current?.abort();
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     cancelPendingRaf();
-    streamingBufferRef.current = "";
-    streamingAgentRef.current = null;
-    setState((prev) => ({ ...prev, status: "idle" }));
+    streamingBufferRef.current = {};
+    setState((prev) => ({ ...prev, status: "idle", streamingMessages: {} }));
   }, [cancelPendingRaf]);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     cancelPendingRaf();
-    streamingBufferRef.current = "";
-    streamingAgentRef.current = null;
+    streamingBufferRef.current = {};
     setState(INITIAL_STATE);
   }, [cancelPendingRaf]);
 

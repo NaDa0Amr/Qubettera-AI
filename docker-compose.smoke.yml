@@ -1,0 +1,18 @@
+# Used only by scripts/docker-smoke.py with an isolated project name.
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: smoke
+      POSTGRES_USER: smoke
+      POSTGRES_PASSWORD: smoke-test-only
+  backend:
+    env_file: !reset []
+    environment:
+      PGDATABASE: smoke
+      PGUSER: smoke
+      PGPASSWORD: smoke-test-only
+    ports: !override
+      - "127.0.0.1::8000"
+  frontend:
+    ports: !override
+      - "127.0.0.1::3000"
