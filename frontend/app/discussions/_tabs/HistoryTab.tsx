@@ -93,16 +93,16 @@ export function HistoryTab() {
                 className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
               >
                 <td className="px-4 py-4 text-slate-800 dark:text-slate-200 max-w-xs">
-                  <p className="font-medium">{truncate(d.topic, 60)}</p>
+                  <p className="font-medium">{truncate(d.topic, 60) || "Untitled discussion"}</p>
                   <p className="font-mono text-xs text-slate-400 mt-0.5">
                     {d.discussion_id.slice(0, 8)}…
                   </p>
                 </td>
                 <td className="px-4 py-4 text-slate-600 dark:text-slate-400 hidden sm:table-cell">
-                  {d.num_agents}
+                  {d.num_agents ?? "—"}
                 </td>
                 <td className="px-4 py-4 text-slate-600 dark:text-slate-400 hidden md:table-cell">
-                  {d.num_rounds}
+                  {d.num_rounds ?? "—"}
                 </td>
                 <td className="px-4 py-4 text-slate-500 dark:text-slate-400 hidden md:table-cell whitespace-nowrap">
                   {formatRelativeTime(d.created_at)}
