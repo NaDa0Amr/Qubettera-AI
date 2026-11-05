@@ -1,23 +1,16 @@
-
-```markdown
 # Qubettera
 
-Qubettera is a retrieval-grounded, multi-agent AI discussion platform. It
-collects and indexes research content, retrieves relevant evidence, and gives
-that evidence to configurable persona agents that debate a topic over a
-strongly connected graph.
+Qubettera is a retrieval-grounded, multi-agent AI discussion platform. It collects and indexes research content, retrieves relevant evidence, and gives that evidence to configurable persona agents that debate a topic over a strongly connected graph.
 
-The project includes a Python AI engine, FastAPI backend, Next.js dashboard,
-PostgreSQL/pgvector knowledge base, discussion analytics, and Docker
-deployment.
+The project includes a Python AI engine, FastAPI backend, Next.js dashboard, PostgreSQL/pgvector knowledge base, discussion analytics, and Docker deployment.
 
 ```text
 question
-   -> hybrid RAG retrieval
-   -> cited evidence
-   -> persona-based LLM agents
-   -> graph-routed discussion rounds
-   -> transcript, analytics, and visual reports
+  -> hybrid RAG retrieval
+  -> cited evidence
+  -> persona-based LLM agents
+  -> graph-routed discussion rounds
+  -> transcript, analytics, and visual reports
 ```
 
 ## Highlights
@@ -37,23 +30,21 @@ question
 
 ```text
 Next.js / React UI
-        |
-        v
+       |
+       v
 FastAPI API + SSE endpoints
-        |
-        v
+       |
+       v
 Qubettera Python engine
-  |        |          |
-  v        v          v
+   |        |          |
+   v        v          v
 RAG     LangGraph   Analytics
-  |        |
-  v        v
+   |        |
+   v        v
 PostgreSQL/pgvector  LLM provider
 ```
 
-The shared engine is located in `src/qubettera/`. The web application is split
-between `backend/` and `frontend/`, while `resources/` contains persona,
-prompt, and graph configuration.
+The shared engine is located in `src/qubettera/`. The web application is split between `backend/` and `frontend/`, while `resources/` contains persona, prompt, and graph configuration.
 
 ## Technology Stack
 
@@ -97,8 +88,7 @@ The Docker setup includes:
 - Persistent database, research-data, discussion-output, and model-cache storage.
 - Optional Ollama deployment using `docker-compose.ollama.yml`.
 
-See [Docker deployment documentation](docs/docker.md) for publishing,
-containerized Ollama, health checks, and smoke testing.
+See [Docker deployment documentation](docs/docker.md) for publishing, containerized Ollama, health checks, and smoke testing.
 
 ## Local Setup
 
@@ -153,9 +143,7 @@ Open:
 
 ## RAG Pipeline
 
-The RAG pipeline collects research sources, cleans and chunks documents,
-creates embeddings, stores them in PostgreSQL/pgvector, and evaluates retrieval
-quality.
+The RAG pipeline collects research sources, cleans and chunks documents, creates embeddings, stores them in PostgreSQL/pgvector, and evaluates retrieval quality.
 
 ```bash
 qubettera rag pipeline
@@ -166,8 +154,7 @@ qubettera rag evaluate --mode hybrid
 qubettera rag evaluate --mode adaptive
 ```
 
-The default embedding model is `Qwen/Qwen3-Embedding-0.6B`. Embeddings are
-generated incrementally and can resume from cached output after interruption.
+The default embedding model is `Qwen/Qwen3-Embedding-0.6B`. Embeddings are generated incrementally and can resume from cached output after interruption.
 
 ## Discussions
 
@@ -184,12 +171,9 @@ qubettera discuss run --mode live
 qubettera discuss run --mode live --analyze
 ```
 
-The standard configuration creates five opening opinions, three discussion
-rounds, and a moderator synthesis. Each round uses a snapshot of the previous
-round, preventing same-round response leakage.
+The standard configuration creates five opening opinions, three discussion rounds, and a moderator synthesis. Each round uses a snapshot of the previous round, preventing same-round response leakage.
 
-Responses are required to use exact `[Source: URL]` citations when evidence is
-available.
+Responses are required to use exact `[Source: URL]` citations when evidence is available.
 
 Generate an individual agent opinion:
 
@@ -199,8 +183,7 @@ qubettera agent opinion dr_aris "Dense versus sparse transformer layers"
 
 ## Analytics
 
-Analytics consumes a completed live discussion log and produces a JSON summary,
-Markdown report, and PNG visualizations:
+Analytics consumes a completed live discussion log and produces a JSON summary, Markdown report, and PNG visualizations:
 
 ```bash
 qubettera analytics run outputs/discussions/<discussion-id>.jsonl
@@ -213,8 +196,7 @@ The analytics pipeline measures:
 - Influence across routed graph edges.
 - Sentiment at message, agent, and round level.
 
-Fake discussions are intended for orchestration and UI testing and are rejected
-by the analytics loader because they do not contain real opinions.
+Fake discussions are intended for orchestration and UI testing and are rejected by the analytics loader because they do not contain real opinions.
 
 ## API and Frontend Routes
 
@@ -229,9 +211,7 @@ by the analytics loader because they do not contain real opinions.
 | `/health` | Liveness check |
 | `/health/ready` | Local readiness check |
 
-Discussion and analytics updates are streamed using Server-Sent Events. The
-frontend proxies requests to the FastAPI backend and maintains separate
-streaming state for concurrent participant responses.
+Discussion and analytics updates are streamed using Server-Sent Events. The frontend proxies requests to the FastAPI backend and maintains separate streaming state for concurrent participant responses.
 
 ## Testing and Verification
 
@@ -258,9 +238,7 @@ Container smoke test:
 python scripts/docker-smoke.py --namespace nada123456aa --tag 0.1.0
 ```
 
-The smoke test checks service health, frontend proxying, fake discussions,
-history persistence after restart, pgvector availability, CLI installation,
-non-root container permissions, CPU PyTorch, and Chromium.
+The smoke test checks service health, frontend proxying, fake discussions, history persistence after restart, pgvector availability, CLI installation, non-root container permissions, CPU PyTorch, and Chromium.
 
 ## Repository Layout
 
@@ -292,10 +270,5 @@ Copy `.env.example` to `.env`.
 | `CHECKPOINT_BACKEND` | In-memory or PostgreSQL LangGraph checkpoints |
 | `SEARCH_PROVIDER` | External search provider for agent tools |
 
-Do not commit `.env` files, API keys, model credentials, or database passwords.
 
 ## License
-
-No license file is currently included in this repository. Add a license before
-redistributing the project or its source code.
-```
